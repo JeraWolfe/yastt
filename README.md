@@ -2,6 +2,8 @@
 
 **A local, live dashboard for your Claude Code token usage** — context fill, per‑exchange cost, cache efficiency, sub‑agent breakdown, and your real rate‑limit budget. Runs entirely on your machine.
 
+![YASTT — the live token dashboard: per-client context fill over time, cost, cache, and rate-limit budget](docs/screenshot.png)
+
 > ### 🧪 Alpha (`0.1.0-alpha`)
 > This is an early release being tested with a small group. It works, but expect rough edges and active updates. Issues and feedback are welcome. See **[Known issues & roadmap](#known-issues--roadmap)**.
 
