@@ -1,0 +1,13 @@
+# YASTT — never commit user data or secrets.
+# Token usage data is personal; the OAuth token is a credential. Both stay on the user's machine.
+*.csv
+yastt_rollup_state.json
+.credentials.json
+yastt/                 # a stray local data dir, if one is ever created in-repo
+
+# Node / tooling / OS noise
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.playwright-mcp/

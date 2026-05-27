@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>C-Watch · YASTT</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d0d0d; color: #e0e0e0; font-family: 'Consolas','Courier New',monospace; padding: 24px; min-height: 100vh; }
+
+  .header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { color: #e0e0e0; font-size: 1.05rem; letter-spacing: 0.1em; }
+  .tagline { font-size: 0.58rem; color: #555; letter-spacing: 0.08em; margin-top: 2px; }
+  .live { font-size: 0.65rem; letter-spacing: 0.1em; color: #33ff66; }
+  .live.stale { color: #ff3333; }
+  .updated { font-size: 0.6rem; color: #2e2e2e; margin-left: auto; }
+
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat { background: #111; border: 1px solid #1e1e1e; padding: 9px 16px; border-radius: 3px; }
+  .stat-label { font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.12em; color: #333; }
+  .stat-value { font-size: 1.2rem; margin-top: 2px; color: #ccc; }
+
+  .tab-bar { display: flex; gap: 8px; margin-bottom: 0; align-items: flex-end; }
+  .tab {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 4px 4px 0 0;
+    cursor: pointer; border: 1px solid #1e1e1e; border-bottom: none;
+    background: #0a0a0a; transition: all 0.15s; user-select: none;
+    font-family: inherit; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: #333;
+  }
+  .tab .icon { font-size: 1rem; }
+  .tab:hover { background: #111; color: #666; }
+  .tab.active { background: #0f0f0f; color: #e0e0e0; border-color: var(--tab-color); border-bottom-color: #0f0f0f; }
+  .tab.active .icon { filter: drop-shadow(0 0 4px var(--tab-color)); }
+
+  .chart-area {
+    background: #0f0f0f; border: 1px solid #1e1e1e; border-radius: 0 4px 4px 4px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  .chart-container { position: relative; height: 260px; width: 100%; }
+  .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .chart-title { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.12em; }
+  .chart-subtitle { font-size: 0.58rem; color: #333; }
+
+  .mode-toggle { display: flex; background: #111; border: 1px solid #1e1e1e; border-radius: 3px; overflow: hidden; }
+  .mode-toggle button {
+    background: none; border: none; color: #333; font-family: inherit;
+    font-size: 0.62rem; letter-spacing: 0.06em; padding: 5px 12px;
+    cursor: pointer; transition: all 0.15s; text-transform: uppercase;
+  }
+  .mode-toggle button.active { background: #1e1e1e; color: #ccc; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.68rem; color: #444; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .legend-dash { width: 16px; height: 0; border-top: 2px dashed #aa44ff; }
+
+  .who-btn {
+    background: #111; border: 1px solid #1e1e1e; color: #444; font-family: inherit;
+    font-size: 0.65rem; letter-spacing: 0.08em; padding: 6px 16px; border-radius: 3px;
+    cursor: pointer; transition: all 0.15s; text-transform: uppercase;
+  }
+  .who-btn:hover { color: #888; border-color: #333; }
+  .who-btn.active { background: #1a1a1a; color: #e0e0e0; border-color: #555; }
+
+  .agent-area {
+    background: #0f0f0f; border: 1px solid #1e1e1e; border-radius: 4px;
+    padding: 20px; margin-top: 0;
+  }
+  .agent-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .agent-title { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.12em; }
+  .agent-subtitle { font-size: 0.58rem; color: #333; }
+  .who-btns { display: flex; background: #111; border: 1px solid #1e1e1e; border-radius: 3px; overflow: hidden; }
+  .who-btns button {
+    background: none; border: none; color: #333; font-family: inherit;
+    font-size: 0.62rem; letter-spacing: 0.06em; padding: 5px 12px;
+    cursor: pointer; transition: all 0.15s; text-transform: uppercase;
+  }
+  .who-btns button.active { background: #1e1e1e; color: #ccc; }
+
+  /* Model row: per-model usage gauges that double as model filters. Slides in below the tabs. */
+  .limit-toggle { cursor: pointer; }
+  .limit-row { display: flex; gap: 8px; align-items: stretch; overflow: hidden; max-height: 0; margin: 0; transition: max-height 0.4s ease, margin 0.4s ease; }
+  .limit-row.open { max-height: 90px; margin-bottom: 12px; }
+  .mgauge { background: #111; border: 1px solid #1e1e1e; border-radius: 3px; padding: 7px 14px; min-width: 96px; text-align: left; font-family: inherit; }
+  .mgauge .ml { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.1em; color: #555; }
+  .mgauge .mv { font-size: 1.0rem; color: #fff; margin-top: 2px; }            /* bright white number */
+  .mgauge .mbar { height: 4px; background: #1e1e1e; border-radius: 2px; margin-top: 5px; overflow: hidden; }
+  .mgauge .mbar > div { height: 100%; }
+  .mgauge.btn { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+  .mgauge.btn:hover { border-color: #444; }
+  .mgauge.btn.active { border-color: #888; background: #1a1a1a; }
+  .mgauge.dim { cursor: default; }                                            /* no data: grey as the button */
+  .mgauge.dim .ml, .mgauge.dim .mv { color: #2c2c2c; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>C-WATCH &middot; YASTT</h1>
+    <div class="tagline">Yet Another Simple Token Tracker</div>
+  </div>
+  <span class="live" id="live-indicator">&#9679; LIVE</span>
+  <span class="updated" id="updated"></span>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="limit-row" id="limit-row"></div>
+
+<div class="tab-bar">
+  <div class="tab active" id="tab-tokens" style="--tab-color:#3399ff" onclick="setTab('tokens')">
+    <span class="icon">&#128200;</span> Tokens
+  </div>
+  <div class="tab" id="tab-cost" style="--tab-color:#ffff33" onclick="setTab('cost')">
+    <span class="icon">&#129689;</span> Cost
+  </div>
+  <div class="tab" id="tab-cache" style="--tab-color:#00ccbb" onclick="setTab('cache')">
+    <span class="icon">&#9889;&#65039;</span> Cache
+  </div>
+  <div style="margin-left:auto;display:flex;gap:10px;align-items:flex-end;padding-bottom:4px">
+    <div class="mode-toggle" id="limitmode-toggle">
+      <button id="btn-lm-polling" class="active" onclick="setLimitMode('polling')">Polling</button>
+      <button id="btn-lm-realtime" onclick="setLimitMode('realtime')">Realtime</button>
+    </div>
+    <div id="who-filter" style="display:flex;gap:6px;align-items:flex-end"></div>
+  </div>
+</div>
+
+<div class="chart-area">
+  <div class="chart-header">
+    <div>
+      <div class="chart-title" id="chart-title">Token Total</div>
+      <div class="chart-subtitle" id="chart-subtitle">Context window fill over time</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="mode-toggle" id="tokens-toggle" style="display:flex">
+        <button id="btn-tokens-total" class="active" onclick="setTokensMode('total')">&#128200; Total</button>
+        <button id="btn-tokens-delta" onclick="setTokensMode('delta')">&#9889; Delta</button>
+      </div>
+      <div class="mode-toggle" id="ywindow-toggle" style="display:flex">
+        <button id="btn-ywindow-200k" class="active" onclick="setYWindowMode('200k')">200K</button>
+        <button id="btn-ywindow-1m" onclick="setYWindowMode('1m')">1M</button>
+      </div>
+      <div class="mode-toggle" id="cost-toggle" style="display:none">
+        <button id="btn-cost-total" class="active" onclick="setCostMode('total')">&#129689;+ Total</button>
+        <button id="btn-cost-delta" onclick="setCostMode('delta')">&#129689; Per</button>
+      </div>
+      <div class="mode-toggle" id="timewindow-toggle" style="display:flex">
+        <button id="btn-tw-full" onclick="setTimeWindow('full')">Full</button>
+        <button id="btn-tw-week" onclick="setTimeWindow('week')">Week</button>
+        <button id="btn-tw-day" class="active" onclick="setTimeWindow('day')">Day</button>
+        <button id="btn-tw-5h" onclick="setTimeWindow('5h')">5h</button>
+      </div>
+      <div class="mode-toggle" id="windowsback-toggle" style="display:none">
+        <button id="btn-wb-expand" onclick="expandWindow(1)" title="include previous window">&#9664;&nbsp;&#9654;</button>
+        <button id="btn-wb-contract" onclick="expandWindow(-1)" title="current window only">&#9654;&nbsp;&#9664;</button>
+      </div>
+      <div class="mode-toggle" id="colormode-toggle" style="display:none">
+        <button id="btn-session" class="active" onclick="setColorMode('session')">Session</button>
+        <button id="btn-5h" onclick="setColorMode('5h')">5h Block</button>
+      </div>
+    </div>
+  </div>
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+  </div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="agent-area">
+  <div class="agent-header">
+    <div>
+      <div class="agent-title">Agents</div>
+      <div class="agent-subtitle">Per-call token totals &middot; time vs tokens</div>
+    </div>
+    <div class="who-btns" id="agent-filter"></div>
+  </div>
+  <div class="chart-container">
+    <canvas id="agent-chart"></canvas>
+  </div>
+</div>
+
+<script>
+const PALETTE = ['#ff4444','#44dd66','#4488ff','#33dddd','#ff55cc','#ffdd44'];  // RGB triad then CMY triad, cycles
+
+// ── SHIP LABELS — the locally-trackable client identities. To personalize, change ONLY these. ──
+// CLI = command line · DESK = desktop app. The Planner (C-Brain) and browser (C-Dawg) run in the
+// cloud, so local hooks never see them — they're not tracked here. Agents have their own chart.
+const WHO = { cli: 'CLI', desk: 'DESK' };
+const WHO_ORDER = [WHO.cli, WHO.desk];
+// ──────────────────────────────────────────────────────────────────────────────────
+const TABS = {
+  tokens: { title: 'Tokens',          subtitle: 'Context window fill over time',     key: 'total'      },
+  cost:   { title: 'Cost (USD)',       subtitle: 'Per-exchange cost in dollars',       key: 'cost'       },
+  cache:  { title: 'Cache Efficiency', subtitle: 'cache_read / context_fill (0-1.0)', key: 'cacheRatio' },
+};
+const WHO_COLORS = { [WHO.cli]: '#3399ff', [WHO.desk]: '#ff8800', '?': '#777' };
+
+const sessionColorMap = {}, blockColorMap = {};
+let sessionIdx = 0, blockIdx = 0;
+const sessionColor = s => { if (!s) return '#555'; if (!(s in sessionColorMap)) sessionColorMap[s] = PALETTE[sessionIdx++ % PALETTE.length]; return sessionColorMap[s]; };
+const blockColor   = b => { if (!(b in blockColorMap)) blockColorMap[b] = PALETTE[blockIdx++ % PALETTE.length]; return blockColorMap[b]; };
+const get5hBlock   = (d, t) => { if (!d || !t) return 0; return Math.floor(new Date(`${d}T${t}`).getTime() / (1000 * 60 * 60 * 5)); };
+
+let colorMode   = 'session';
+let activeTab   = 'tokens';
+let costMode    = 'total';   // default to Total (cumulative), matching the Tokens tab's Total/Delta order
+let tokensMode  = 'total';
+let whoFilter   = 'all';
+let modelFilter = 'all';      // 'all' | 'opus' | 'sonnet' | 'haiku' — filters the graph by model family
+let limitsOpen  = false;      // is the per-model usage row revealed (7D chip toggled open)?
+let timeWindow  = 'day';
+let dayHours    = 24;         // DAY view span: 24h (calendar day) or 36h (+ previous 12h, midnight overlap)
+let defaultsApplied = false;  // dynamic openers picked from the data once on first load, then user takes over
+let yWindowMode = '200k';
+let yAuto       = true;       // y-scale still following the auto rule (false once the user clicks 200K/1M)
+let allRows = [], rows = [];
+let chart = null, agentChart = null;
+let chartStructKey = '';
+let usageLimits = null;  // { fiveHourResetMs, weeklyResetMs, ...utilization } from /usage endpoint
+let limitMode   = 'polling';  // 'polling' = check on load/toggle; 'realtime' = every 60s
+let limitTimer  = null;
+let windowsBack = 0;          // 0 = current window only; +N = also show N previous windows (week/5h)
+let whoDataStore  = {};
+let singleRowRef  = [];
+
+function buildAllTs() {
+  return [...new Set(allRows.map(r => `${r.date} ${r.time}`))].sort();
+}
+
+// Build both filter button bars from WHO_ORDER so the labels live in one place.
+function buildFilterButtons() {
+  const items = ['all', ...WHO_ORDER];
+  document.getElementById('who-filter').innerHTML = items.map((w, i) =>
+    `<button class="who-btn${i === 0 ? ' active' : ''}" onclick="setWhoFilter('${w}')">${w === 'all' ? 'All' : w}</button>`).join('');
+  document.getElementById('agent-filter').innerHTML = items.map((w, i) =>
+    `<button class="${i === 0 ? 'active' : ''}" onclick="setAgentFilter('${w}')">${w === 'all' ? 'All' : w}</button>`).join('');
+}
+
+function getYForRow(r) {
+  if (activeTab === 'tokens') return tokensMode === 'delta' ? r.delta : r.total;
+  if (activeTab === 'cost')   return costMode   === 'total' ? r.costTotal : r.cost;
+  return r[TABS[activeTab].key];
+}
+
+// WHO is determined by SESSION ID — one session is one client, start to finish.
+// Model is NOT a signal: CLI and the Planner can both run Opus. The old model heuristic
+// only worked while CLI was Sonnet and the Planner was Opus; both are Opus now.
+// Live sessions self-identify via the explicit who field (entrypoint-derived in the hook).
+// Legacy sessions logged before who-tracking are mapped here by their session id.
+// Maps every label that can appear in the CSV -> the display WHO. The hooks write CLI/DESK/WEB
+// (stable); old rows carry legacy team labels. Both route through WHO, so renaming WHO alone
+// re-skins the whole dashboard without touching the hooks.
+// Only the locally-trackable clients map here: CLI (C-Bug/Bug) and DESK (C-Bucks/Buc).
+// C-Brain (Planner) and C-Dawg (browser) are cloud -> never reach local hooks -> not tracked.
+const WHO_ALIAS = {
+  CLI: WHO.cli, DESK: WHO.desk,
+  Bug: WHO.cli, Buc: WHO.desk,
+};
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n').filter(l => l.trim()).slice(1);
+  // Resolve each session's who ONCE from its logged who field: the first explicit who
+  // (not empty, not '?') the session logged, mapped through WHO_ALIAS to the display label.
+  // No hardcoded sessions, no model. A session that never logged a who shows '?'.
+  const explicitWho = {};
+  lines.forEach(line => {
+    const p = line.split(',');
+    const session = (p[6] || '').trim();
+    const rawWho  = (p[7] || '').trim();
+    if (session && rawWho && rawWho !== '?' && !(session in explicitWho)) explicitWho[session] = rawWho;
+  });
+  const sessionWho = {};
+  const whoForSession = session => {
+    if (!session) return '?';
+    if (!(session in sessionWho)) {
+      const raw = explicitWho[session];
+      sessionWho[session] = (raw && (WHO_ALIAS[raw] || raw)) || '?';
+    }
+    return sessionWho[session];
+  };
+  const parsed = lines.map(line => {
+    const p = line.split(',');
+    const rawModel = (p[8] || '').trim();
+    const session  = (p[6] || '').trim();
+    const who = whoForSession(session);
+    return {
+      delta:      parseInt(p[0]) || 0,
+      total:      parseInt(p[1]) || 0,
+      pct:        parseInt(p[2]) || 0,
+      date:       (p[3] || '').trim(),
+      time:       (p[4] || '').trim(),
+      label:      (p[4] || '').substring(0, 5),
+      flag:       (p[5] || '').trim(),
+      session,
+      who,
+      model:      rawModel,
+      cost:       parseFloat(p[9]) || 0,
+      cacheRatio: parseFloat(p[10]) || 0,
+      costTotal:  0,
+    };
+  });
+  let running = 0;
+  parsed.forEach(r => { running += r.cost; r.costTotal = running; });
+  return parsed;
+}
+
+function updateStats() {
+  // Stats reflect the GRAPH's scope: current time window + who filter + model filter.
+  const { min, max } = windowBounds();
+  const base = whoFilter === 'all' ? allRows : allRows.filter(r => r.who === whoFilter);
+  const src = mFilter(base).filter(r => { const t = rowMs(r); return !isNaN(t) && t >= min && t <= max; });
+  const totalCost = src.reduce((s, r) => s + r.cost, 0);          // total cost of the visible exchanges
+  const lastCost  = src.length ? src[src.length - 1].cost : 0;
+  const avgCache  = src.length ? src.reduce((s, r) => s + r.cacheRatio, 0) / src.length : 0;
+  let html = [
+    ['Exchanges', src.length],
+    ['Peak Total', Math.max(0, ...src.map(r => r.total)).toLocaleString()],
+    ['Cost',       '$' + totalCost.toFixed(4)],
+    ['Last Cost',  '$' + lastCost.toFixed(4)],
+    ['Avg Cache',  (avgCache * 100).toFixed(1) + '%'],
+    ['Compacts',   src.filter(r => r.flag === 'C').length],
+  ].map(([l, v]) => `<div class="stat"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
+
+  // Budget: only the overall 7D chip shows by default; clicking it reveals the per-model usage row.
+  if (usageLimits && usageLimits.weeklyUtil != null) {
+    const v = usageLimits.weeklyUtil <= 1 ? usageLimits.weeklyUtil * 100 : usageLimits.weeklyUtil;
+    const col = v < 60 ? '#33ff66' : v < 85 ? '#ffdd44' : '#ff4444';
+    const bar = `<div style="height:4px;width:100%;background:#1e1e1e;border-radius:2px;margin-top:5px;overflow:hidden"><div style="height:100%;width:${Math.min(100, v)}%;background:${col}"></div></div>`;
+    html += `<div class="stat limit-toggle" onclick="toggleLimits()" title="per-model usage"><div class="stat-label">7D Used ${limitsOpen ? '▾' : '▸'}</div><div class="stat-value">${v.toFixed(0)}%</div>${bar}</div>`;
+  }
+  document.getElementById('stats').innerHTML = html;
+}
+
+function updateLegend() {
+  const el = document.getElementById('legend');
+  // Aggregated views color by WHO (week) or a single condensed series (full) -- not by session.
+  if (!isRawView()) {
+    if (timeWindow === 'full') {
+      el.innerHTML = `<div class="legend-item"><div class="legend-dot" style="background:#cccccc"></div>weekly total &middot; all</div>`;
+      return;
+    }
+    const whos = [...new Set(rows.map(r => r.who).filter(Boolean))];
+    el.innerHTML = whos.map(w => `<div class="legend-item"><div class="legend-dot" style="background:${WHO_COLORS[w] || '#888'}"></div>${w} &middot; per hour</div>`).join('')
+      + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
+    return;
+  }
+  if (whoFilter === 'all' || colorMode === 'session') {
+    const sessions = [...new Set(rows.map(r => r.session).filter(Boolean))];
+    const whoMap = {};
+    rows.forEach(r => { if (r.session && r.who) whoMap[r.session] = r.who; });
+    el.innerHTML = sessions.map(s =>
+      `<div class="legend-item"><div class="legend-dot" style="background:${sessionColor(s)}"></div>${s}${whoMap[s] ? ' (' + whoMap[s] + ')' : ''}</div>`
+    ).join('') + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
+  } else {
+    const blocks = [...new Set(rows.map(r => get5hBlock(r.date, r.time)))].sort((a, b) => a - b);
+    el.innerHTML = blocks.map(b => {
+      const dt = new Date(b * 5 * 60 * 60 * 1000);
+      return `<div class="legend-item"><div class="legend-dot" style="background:${blockColor(b)}"></div>${dt.toISOString().substring(11, 16)} block</div>`;
+    }).join('') + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
+  }
+}
+
+const FIVE_H = 5 * 60 * 60 * 1000;
+const HOUR_MS = 3600000;
+const WEEK_MS = 7 * 24 * HOUR_MS;
+const rowMs = r => new Date(`${r.date}T${r.time}`).getTime();
+// A plotted point's x: a bucket's own start for aggregated rows, else the pip's clock time.
+const pointMs = r => (r._bucketMs != null ? r._bucketMs : rowMs(r));
+const isRawView = () => timeWindow === '5h' || timeWindow === 'day';
+
+// ── LOD AGGREGATION ──────────────────────────────────────────────────────────────
+// Display grain coarsens as you zoom out (the other end of the retention ladder):
+//   5h/day -> raw pips (context fill);  week -> hourly sums (consumption);  full -> weekly sums.
+// delta + cost SUM per bucket; cache AVERAGES; total/costTotal carry the running cumulative
+// within the view so the Total/Delta sub-toggle still reads. Aged buckets come from the tier
+// files (yastt_hourly/yastt_weekly); recent buckets are summed live from raw pips. Raw wins on
+// overlap (post-scrub they're disjoint anyway). This is the "math step over present data".
+let hourlyTier = [], weeklyTier = [];   // {ms, who, delta, cost, cache, n} — filled from tier CSVs
+
+const hourStart = ms => Math.floor(ms / HOUR_MS) * HOUR_MS;
+// Start of the billing week containing ms, aligned to the user's real weekly reset when known.
+function weekStart(ms) {
+  if (usageLimits && usageLimits.weeklyResetMs) {
+    const anchor = usageLimits.weeklyResetMs;
+    return anchor + Math.floor((ms - anchor) / WEEK_MS) * WEEK_MS;
+  }
+  return Math.floor(ms / WEEK_MS) * WEEK_MS;
+}
+
+// Sum srcRows (+ any tier rows) into buckets, then emit synthetic agg rows with cumulative totals.
+function aggregate(srcRows, bucketFn, perWho, tier) {
+  const sums = {};
+  const add = (bms, who, delta, cost, cache, n) => {
+    const key = bms + '|' + who;
+    const e = sums[key] || (sums[key] = { ms: bms, who, delta: 0, cost: 0, cache: 0, n: 0 });
+    e.delta += delta; e.cost += cost; e.cache += cache * n; e.n += n;
+  };
+  srcRows.forEach(r => { const ms = rowMs(r); if (!isNaN(ms)) add(bucketFn(ms), perWho ? r.who : 'ALL', r.delta, r.cost, r.cacheRatio, 1); });
+  (tier || []).forEach(t => { const key = t.ms + '|' + t.who; if (!(key in sums)) add(t.ms, t.who, t.delta, t.cost, t.cache, t.n || 1); });
+  const list = Object.values(sums).sort((a, b) => a.ms - b.ms);
+  const runDelta = {}, runCost = {};
+  return list.map(e => {
+    runDelta[e.who] = (runDelta[e.who] || 0) + e.delta;
+    runCost[e.who]  = (runCost[e.who]  || 0) + e.cost;
+    return {
+      delta: e.delta, total: runDelta[e.who], cost: e.cost, costTotal: runCost[e.who],
+      cacheRatio: e.n ? e.cache / e.n : 0, who: e.who, session: null, model: '', flag: '',
+      _bucketMs: e.ms, _agg: true,
+    };
+  });
+}
+
+// Model family from a model id, e.g. 'claude-opus-4-7' -> 'opus'. '' when unknown/aggregated.
+function modelFamily(m) {
+  m = (m || '').toLowerCase();
+  return m.includes('opus') ? 'opus' : m.includes('sonnet') ? 'sonnet' : m.includes('haiku') ? 'haiku' : (m ? 'other' : '');
+}
+// Apply the model filter at the SOURCE (raw pips), so it flows through to every view's aggregation.
+const mFilter = arr => modelFilter === 'all' ? arr : arr.filter(r => modelFamily(r.model) === modelFilter);
+
+// The rows a view plots. Week = hourly per-WHO; full = weekly WHO-stripped (single ALL series).
+// Tier files carry no model breakdown, so a model filter drops them (raw pips only while filtering).
+function displayRows(srcRows) {
+  if (timeWindow === 'week') {
+    const tier = modelFilter !== 'all' ? [] : (whoFilter === 'all' ? hourlyTier : hourlyTier.filter(t => t.who === whoFilter));
+    return aggregate(mFilter(srcRows), hourStart, true, tier);
+  }
+  if (timeWindow === 'full') return aggregate(mFilter(allRows), weekStart, false, modelFilter !== 'all' ? [] : weeklyTier);
+  return mFilter(srcRows);
+}
+
+// Plotted-point color: aggregated buckets color by WHO (hourly) or neutral (weekly ALL);
+// raw pips keep the session / 5h-block palette.
+function rowColor(r) {
+  if (r._agg) return r.who === 'ALL' ? '#cccccc' : (WHO_COLORS[r.who] || '#888');
+  return colorMode === 'session' ? sessionColor(r.session) : blockColor(get5hBlock(r.date, r.time));
+}
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// 5h usage-window starts: a new window opens at the first time at/after the current window's
+// 5h expiry (re-anchors after idle). Matches Claude's first-message + 5h reset schedule.
+function usageWindowStarts(times) {
+  const starts = [];
+  let cur = null;
+  for (const t of times) { if (cur === null || t >= cur + FIVE_H) { cur = t; starts.push(t); } }
+  return starts;
+}
+
+// Visible time window [min, max], anchored to the live clock.
+// Smallest reset boundary >= now, given an anchor reset time and a period.
+function currentWindowEnd(anchorMs, periodMs, now) {
+  let end = anchorMs + Math.ceil((now - anchorMs) / periodMs) * periodMs;
+  if (end < now) end += periodMs;
+  return end;
+}
+
+function windowBounds() {
+  const now = Date.now();
+  const back = windowsBack;  // 0 or 1 -- one previous period back (one 5h block for 5h, one week for week)
+  if (timeWindow === 'full') {
+    // All billing weeks from the earliest data to the current week's end.
+    const times = allRows.map(rowMs).filter(t => !isNaN(t)).sort((a, b) => a - b);
+    const earliest = times.length ? weekStart(times[0]) : weekStart(now);
+    const end = (usageLimits && usageLimits.weeklyResetMs)
+      ? currentWindowEnd(usageLimits.weeklyResetMs, WEEK_MS, now) : now;
+    return { min: earliest, max: end };
+  }
+  if (timeWindow === 'week') {
+    const period = 7 * 24 * 3600 * 1000;
+    if (usageLimits && usageLimits.weeklyResetMs) {
+      const end = currentWindowEnd(usageLimits.weeklyResetMs, period, now);
+      return { min: end - (back + 1) * period, max: end };
+    }
+    return { min: now - (back + 1) * period, max: now };
+  }
+  if (timeWindow === 'day') {
+    const H = 3600 * 1000;
+    const d = new Date();
+    const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    if (dayHours === 24) return { min: startOfDay, max: startOfDay + 24 * H - 1 };   // locked to the day-of
+    // 36h clock:
+    const s = currentSessionBounds();
+    if (s && (s.latest - s.start) > 36 * H) {                       // marathon: slide to the most recent 36h
+      return { min: s.latest - 24 * H, max: s.latest + 12 * H };
+    }
+    const prev12Start = startOfDay - 12 * H;                        // anchor (decided from the data, focus-first)
+    const hasPrevWork = allRows.some(r => { const t = rowMs(r); return t >= prev12Start && t < startOfDay; });
+    return hasPrevWork
+      ? { min: prev12Start,  max: startOfDay + 24 * H - 1 }         // work in the previous 12h -> show it: [yesterday 12:00 -> today 24:00]
+      : { min: startOfDay,   max: startOfDay + 36 * H - 1 };        // nothing behind -> room ahead: [today 00:00 -> tomorrow 12:00]
+  }
+  // 5h: phase-lock to Claude's actual reset (from /usage) when available; else derive from gaps.
+  if (usageLimits && usageLimits.fiveHourResetMs) {
+    const end = currentWindowEnd(usageLimits.fiveHourResetMs, FIVE_H, now);
+    return { min: end - FIVE_H - back * FIVE_H, max: end };   // expand = +one previous 5h window (10h at one step back)
+  }
+  const times = allRows.map(rowMs).filter(t => !isNaN(t)).sort((a, b) => a - b);
+  const starts = usageWindowStarts(times);
+  let start = starts.length ? starts[starts.length - 1] : now;
+  for (let i = starts.length - 1; i >= 0; i--) { if (starts[i] <= now) { start = starts[i]; break; } }
+  return { min: start - back * FIVE_H, max: start + FIVE_H };
+}
+
+// Per-model 5h usage-window starts (green) and compacts (yellow), as time-axis lines within [min,max].
+function buildMarkers(min, max) {
+  const ann = {};
+  const isWeek = timeWindow === 'week';
+  const startColor = '#ff8800';  // 5h reset lines: orange in every view
+  const startLine = t => ({
+    type: 'line', xMin: t, xMax: t, borderColor: startColor, borderWidth: 1, borderDash: [3, 3],
+    label: { display: !isWeek, content: '5h', color: startColor, font: { size: 8, family: 'Consolas' }, position: 'start', backgroundColor: 'transparent' }
+  });
+  // 5h reset lines sit on the REAL reset grid from the endpoint (anchor +/- N*5h) -- these mark the
+  // actual token/billing resets, not gaps in the data. Fall back to gap-derivation only until it loads.
+  if (usageLimits && usageLimits.fiveHourResetMs) {
+    const anchor = usageLimits.fiveHourResetMs;
+    for (let t = anchor + Math.ceil((min - anchor) / FIVE_H) * FIVE_H; t <= max; t += FIVE_H) ann[`reset5h_${t}`] = startLine(t);
+  } else {
+    const byModel = {};
+    allRows.forEach(r => { const m = r.model || '?'; (byModel[m] = byModel[m] || []).push(r); });
+    Object.keys(byModel).forEach(m => {
+      usageWindowStarts(byModel[m].map(rowMs).sort((a, b) => a - b)).forEach(t => { if (t >= min && t <= max) ann[`s_${m}_${t}`] = startLine(t); });
+    });
+  }
+  allRows.forEach(r => {
+    if (r.flag !== 'C') return;
+    const t = rowMs(r);
+    if (t >= min && t <= max) {
+      ann[`c_${t}`] = {
+        type: 'line', xMin: t, xMax: t, borderColor: isWeek ? '#aa44ff33' : '#aa44ff88', borderWidth: isWeek ? 0.5 : 0.75, borderDash: [2, 4],
+        label: { display: false, content: 'C', color: '#aa44ff', font: { size: 8, family: 'Consolas' }, position: 'start', backgroundColor: 'transparent' }
+      };
+    }
+  });
+  return ann;
+}
+
+// Subtitle tracks tab AND grain: raw views show fill/per-exchange, aggregated views show consumption.
+function subtitleText() {
+  let s;
+  if (activeTab !== 'tokens') s = TABS[activeTab].subtitle;
+  else if (timeWindow === 'week') s = 'Tokens consumed per hour';
+  else if (timeWindow === 'full') s = 'Tokens consumed per billing week';
+  else s = tokensMode === 'delta' ? 'Tokens added per exchange' : 'Context window fill over time';
+  if (timeWindow === 'day') s += dayHours === 36 ? '  ·  36h (+ previous 12h)' : '  ·  24h';
+  return s;
+}
+
+function setTimeWindow(mode) {
+  // Clicking DAY while already on DAY toggles 24h <-> 36h (no expand arrows for day).
+  if (mode === 'day') dayHours = (timeWindow === 'day') ? (dayHours === 24 ? 36 : 24) : 24;
+  timeWindow = mode;
+  windowsBack = 0;
+  ['full', 'week', 'day', '5h'].forEach(w => document.getElementById('btn-tw-' + w).className = w === mode ? 'active' : '');
+  document.getElementById('windowsback-toggle').style.display = (mode === 'week' || mode === '5h') ? 'flex' : 'none';
+  document.getElementById('ywindow-toggle').style.display = (activeTab === 'tokens' && isRawView()) ? 'flex' : 'none';
+  // Full reads the WHO-stripped weekly archive -> the WHO filter is inert; force All and grey the bar.
+  const wf = document.getElementById('who-filter');
+  wf.style.opacity = mode === 'full' ? '0.35' : '1';
+  wf.style.pointerEvents = mode === 'full' ? 'none' : 'auto';
+  document.getElementById('chart-subtitle').textContent = subtitleText();
+  if (mode === 'full' && whoFilter !== 'all') { setWhoFilter('all'); return; }  // setWhoFilter re-renders
+  makeChart();
+  updateStats();    // top numbers are scoped to the window, so re-tally on window change
+  updateLegend();   // legend keys off the grain (session vs WHO), so refresh it on window change
+}
+
+function expandWindow(delta) {
+  windowsBack = Math.max(0, Math.min(1, windowsBack + delta));  // one step back max (one day / one week)
+  makeChart();
+  updateStats();
+}
+
+// ── DYNAMIC DEFAULTS ───────────────────────────────────────────────────────────────
+// Picked once from the data on first load (then the user's clicks take over). Three rules:
+//   #1 y-scale, #2 day 24/36 anchor, #3 opening window. See the day branch of windowBounds() for #2.
+
+// The current continuous work session containing the latest pip: extend back while gaps stay < 5h.
+function currentSessionBounds() {
+  const times = allRows.map(rowMs).filter(t => !isNaN(t)).sort((a, b) => a - b);
+  if (!times.length) return null;
+  let start = times[times.length - 1];
+  for (let i = times.length - 1; i > 0; i--) { if (times[i] - times[i - 1] < FIVE_H) start = times[i - 1]; else break; }
+  return { start, latest: times[times.length - 1] };
+}
+
+// Does the current session span more than one calendar day (cross a midnight)?
+function sessionCrossesMidnight() {
+  const s = currentSessionBounds();
+  if (!s) return false;
+  const dayOf = ms => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  return dayOf(s.start) !== dayOf(s.latest);
+}
+
+// #1 y-scale: Realtime follows the latest prompt's model; Polling follows peak context history.
+function autoYScale() {
+  if (limitMode === 'realtime') {
+    const last = allRows.length ? allRows[allRows.length - 1] : null;
+    return (last && /opus/i.test(last.model)) ? '1m' : '200k';
+  }
+  return Math.max(0, ...allRows.map(r => r.total)) > 200000 ? '1m' : '200k';
+}
+
+function applyDynamicDefaults() {
+  if (yAuto) yWindowMode = autoYScale();                                    // #1
+  const times = allRows.map(rowMs).filter(t => !isNaN(t)).sort((a, b) => a - b);   // #3 by overall data span
+  const span = times.length ? times[times.length - 1] - times[0] : 0;
+  if (span <= FIVE_H)          { timeWindow = '5h';  windowsBack = 0; }      // a few hours -> 5h
+  else if (span <= 2 * FIVE_H) { timeWindow = '5h';  windowsBack = 1; }      // 5-10h -> expanded 5h (10h)
+  else { timeWindow = 'day';   dayHours = sessionCrossesMidnight() ? 36 : 24; }   // >10h -> Day, #2 picks 24/36
+  syncWindowButtons();
+}
+
+// Reflect timeWindow / yWindowMode in the toggle buttons + their visibility (after a programmatic change).
+function syncWindowButtons() {
+  ['full', 'week', 'day', '5h'].forEach(w => document.getElementById('btn-tw-' + w).className = w === timeWindow ? 'active' : '');
+  document.getElementById('btn-ywindow-200k').className = yWindowMode === '200k' ? 'active' : '';
+  document.getElementById('btn-ywindow-1m').className   = yWindowMode === '1m'   ? 'active' : '';
+  document.getElementById('windowsback-toggle').style.display = (timeWindow === 'week' || timeWindow === '5h') ? 'flex' : 'none';
+  document.getElementById('ywindow-toggle').style.display     = (activeTab === 'tokens' && isRawView()) ? 'flex' : 'none';
+  document.getElementById('chart-subtitle').textContent = subtitleText();
+}
+
+function xTickCallback(v) {
+  const d = new Date(v);
+  return timeWindow === 'week'
+    ? d.toLocaleDateString('en', { month: 'numeric', day: 'numeric' })
+    : d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ===== CHART =====
+
+function makeChart() {
+  if (whoFilter === 'all') makeAllModeChart();
+  else makeSingleModeChart();
+}
+
+// Shared chart options. The tooltip row lookup differs per mode (rowGetter).
+function baseOptions(min, max, rowGetter) {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 800, easing: 'easeInOutQuart' },
+    plugins: {
+      legend: { display: false },
+      annotation: { annotations: {} },
+      tooltip: { callbacks: {
+        title: items => items.length ? new Date(items[0].parsed.x).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }) : '',
+        afterBody: items => {
+          const r = rowGetter(items);
+          if (!r) return [];
+          const head = r._agg
+            ? [`${timeWindow === 'full' ? 'week' : 'hour'} sum  who: ${r.who}`, `consumed: ${Math.round(r.delta).toLocaleString()} tok`]
+            : [`session: ${r.session}  who: ${r.who}`, `model: ${r.model || '-'}`];
+          return [...head, `cost: $${r.cost.toFixed(4)}  total: $${r.costTotal.toFixed(4)}`, `cache: ${(r.cacheRatio * 100).toFixed(1)}%`];
+        }
+      } }
+    },
+    scales: {
+      x: { type: 'linear', min, max, ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' }, maxTicksLimit: 12, maxRotation: 0, callback: xTickCallback }, grid: { color: '#181818' } },
+      y: { ...(activeTab === 'tokens' ? { min: 0, ...(isRawView() ? { max: yWindowMode === '200k' ? 200000 : 1000000 } : {}) } : {}), ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' } }, grid: { color: '#181818' } }
+    }
+  };
+}
+
+// Create once per structure; otherwise update in place so points animate (no floor-rebuild).
+function render(datasets, min, max, annotations, makeOpts) {
+  const structKey = whoFilter + '|' + activeTab + '|' + datasets.length;
+  if (chart && structKey === chartStructKey) {
+    datasets.forEach((nd, i) => {
+      const ds = chart.data.datasets[i];
+      ds.label = nd.label;
+      ds.data = nd.data;
+      ds.segment = nd.segment;
+      ds.pointBackgroundColor = nd.pointBackgroundColor;
+      ds.pointBorderColor = nd.pointBorderColor;
+    });
+    chart.options.scales.x.min = min;
+    chart.options.scales.x.max = max;
+    if (activeTab === 'tokens') {
+      chart.options.scales.y.min = 0;
+      if (isRawView()) chart.options.scales.y.max = yWindowMode === '200k' ? 200000 : 1000000;
+      else delete chart.options.scales.y.max;
+    } else { delete chart.options.scales.y.min; delete chart.options.scales.y.max; }
+    chart.options.plugins.annotation.annotations = annotations;
+    chart.update();
+  } else {
+    if (chart) { chart.destroy(); chart = null; }
+    const opts = makeOpts();
+    opts.plugins.annotation.annotations = annotations;
+    chart = new Chart(document.getElementById('chart'), { type: 'line', data: { datasets }, options: opts });
+    chartStructKey = structKey;
+  }
+}
+
+function makeAllModeChart() {
+  const { min, max } = windowBounds();
+  const src = displayRows(allRows);
+  // Per-pip markers (compacts, 5h-starts) only make sense over raw/week views, not the all-time full view.
+  const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
+  if (activeTab === 'tokens' && isRawView()) {
+    annotations['sonnet_max'] = {
+      type: 'line', yMin: 200000, yMax: 200000,
+      borderColor: '#1a3a1a', borderWidth: 1, borderDash: [6, 3],
+      label: { display: yWindowMode === '1m', content: '200K', color: '#2a5a2a', font: { size: 8, family: 'Consolas' }, position: 'start', backgroundColor: 'transparent' }
+    };
+  }
+
+  const whoSet = [...new Set(src.map(r => r.who))];
+  whoDataStore = {};
+  const datasets = whoSet.map(who => {
+    const pts = src.filter(r => r.who === who)
+      .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
+      .sort((a, b) => a.x - b.x);
+    whoDataStore[who] = pts;
+    return {
+      label: who, data: pts,
+      segment: { borderColor: ctx => { const p = pts[ctx.p0DataIndex]; return p ? rowColor(p._r) : 'transparent'; } },
+      borderWidth: 1.5,
+      pointBackgroundColor: pts.map(p => rowColor(p._r)),
+      pointBorderColor:     pts.map(p => rowColor(p._r)),
+      pointRadius: 4, pointHoverRadius: 6,
+      tension: 0.15, fill: false,
+    };
+  });
+
+  render(datasets, min, max, annotations, () => baseOptions(min, max, items => {
+    const p = whoDataStore[items[0]?.dataset?.label]?.[items[0]?.dataIndex];
+    return p && p._r;
+  }));
+}
+
+function makeSingleModeChart() {
+  const { min, max } = windowBounds();
+  const src = displayRows(rows);
+  const pts = src
+    .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
+    .sort((a, b) => a.x - b.x);
+  singleRowRef = pts;
+
+  const dataset = {
+    data: pts,
+    segment: { borderColor: ctx => { const p = pts[ctx.p0DataIndex]; return p ? rowColor(p._r) : 'transparent'; } },
+    borderWidth: 1.5,
+    pointBackgroundColor: pts.map(p => rowColor(p._r)),
+    pointBorderColor:     pts.map(p => rowColor(p._r)),
+    pointRadius: 4, pointHoverRadius: 6,
+    tension: 0.15, fill: false,
+  };
+
+  const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
+  if (activeTab === 'tokens' && isRawView()) {
+    annotations['sonnet_max'] = {
+      type: 'line', yMin: 200000, yMax: 200000,
+      borderColor: '#1a3a1a', borderWidth: 1, borderDash: [6, 3],
+      label: { display: yWindowMode === '1m', content: '200K', color: '#2a5a2a', font: { size: 8, family: 'Consolas' }, position: 'start', backgroundColor: 'transparent' }
+    };
+  }
+
+  render([dataset], min, max, annotations, () => baseOptions(min, max, items => {
+    const p = singleRowRef[items[0]?.dataIndex];
+    return p && p._r;
+  }));
+}
+
+function setTokensMode(mode) {
+  tokensMode = mode;
+  document.getElementById('btn-tokens-total').className = mode === 'total' ? 'active' : '';
+  document.getElementById('btn-tokens-delta').className = mode === 'delta' ? 'active' : '';
+  document.getElementById('chart-subtitle').textContent = subtitleText();
+  makeChart();
+}
+
+function setYWindowMode(mode) {
+  yWindowMode = mode;
+  yAuto = false;   // user took manual control of the y-scale; stop auto-picking it
+  document.getElementById('btn-ywindow-200k').className = mode === '200k' ? 'active' : '';
+  document.getElementById('btn-ywindow-1m').className   = mode === '1m'   ? 'active' : '';
+  makeChart();
+}
+
+function setLimitMode(mode) {
+  limitMode = mode;
+  document.getElementById('btn-lm-polling').className  = mode === 'polling'  ? 'active' : '';
+  document.getElementById('btn-lm-realtime').className = mode === 'realtime' ? 'active' : '';
+  if (yAuto) { yWindowMode = autoYScale(); syncWindowButtons(); if (chart) makeChart(); }  // #1 follows the mode
+  if (limitTimer) { clearInterval(limitTimer); limitTimer = null; }
+  fetchUsage();                                              // immediate check
+  if (mode === 'realtime') limitTimer = setInterval(fetchUsage, 60000);
+}
+
+// Pull live reset times + utilization from cwatch's /usage proxy (token stays server-side).
+async function fetchUsage() {
+  try {
+    const u = await (await fetch('usage?t=' + Date.now())).json();
+    if (!u || u.error) return;
+    usageLimits = {
+      fiveHourResetMs: u.five_hour && u.five_hour.resets_at ? Date.parse(u.five_hour.resets_at) : null,
+      weeklyResetMs:   u.seven_day && u.seven_day.resets_at ? Date.parse(u.seven_day.resets_at) : null,
+      fiveHourUtil:    u.five_hour ? u.five_hour.utilization : null,
+      weeklyUtil:      u.seven_day ? u.seven_day.utilization : null,
+      sonnetUtil:      u.seven_day_sonnet ? u.seven_day_sonnet.utilization : null,
+      opusUtil:        u.seven_day_opus ? u.seven_day_opus.utilization : null,
+    };
+    updateStats();
+    renderModelRow();
+    if (chart) makeChart();
+  } catch (e) {}
+}
+
+// ── Model usage row ──────────────────────────────────────────────────────────────
+// Per-model 7D gauges that double as model filters. A tile is LIT (clickable) when that model has
+// rows in the file; greyed + "—" + unclickable when it doesn't. Endpoint util fills the bar/number
+// when present (Opus can be lit-but-"—" when the endpoint withholds its number). 5H is info-only.
+function renderModelRow() {
+  const row = document.getElementById('limit-row');
+  if (!row) return;
+  row.className = 'limit-row' + (limitsOpen ? ' open' : '');
+  if (!limitsOpen) { row.innerHTML = ''; return; }
+  const u = usageLimits || {};
+  const norm = v => v == null ? null : (v <= 1 ? v * 100 : v);
+  const barCol = p => p < 60 ? '#33ff66' : p < 85 ? '#ffdd44' : '#ff4444';
+  const present = new Set(allRows.map(r => modelFamily(r.model)).filter(Boolean));
+  const tile = (label, util, key) => {
+    const v = norm(util);
+    const filterable = key != null && (key === 'all' || present.has(key));
+    const dim = key != null && !filterable;                  // a model with no rows -> greyed, unclickable
+    const active = key != null && modelFilter === key;
+    const cls = 'mgauge' + (key != null ? ' btn' : '') + (dim ? ' dim' : '') + (active ? ' active' : '');
+    const click = (key != null && filterable) ? ` onclick="setModelFilter('${key}')"` : '';
+    const barInner = v == null ? '' : `<div style="width:${Math.min(100, v)}%;background:${barCol(v)}"></div>`;
+    return `<div class="${cls}"${click}><div class="ml">${label}</div><div class="mv">${v == null ? '—' : v.toFixed(0) + '%'}</div><div class="mbar">${barInner}</div></div>`;
+  };
+  row.innerHTML =
+    tile('5H', u.fiveHourUtil, null) +        // window gauge (info only)
+    tile('All 7D', u.weeklyUtil, 'all') +     // clears the model filter
+    tile('Opus', u.opusUtil, 'opus') +
+    tile('Sonnet', u.sonnetUtil, 'sonnet') +
+    tile('Haiku', null, 'haiku');
+}
+
+function setModelFilter(key) {
+  modelFilter = (modelFilter === key && key !== 'all') ? 'all' : key;   // click the active model again -> back to all
+  renderModelRow();
+  makeChart();
+  updateStats();
+  updateLegend();
+}
+
+function toggleLimits() {
+  limitsOpen = !limitsOpen;
+  if (!limitsOpen) modelFilter = 'all';   // collapsing clears the filter so the graph returns to all models
+  renderModelRow();
+  updateStats();
+  makeChart();
+  updateLegend();
+}
+
+function setTab(tab) {
+  activeTab = tab;
+  document.getElementById('chart-title').textContent    = TABS[tab].title;
+  document.getElementById('chart-subtitle').textContent = subtitleText();
+  ['tokens', 'cost', 'cache'].forEach(id => {
+    document.getElementById(`tab-${id}`).className = 'tab' + (id === tab ? ' active' : '');
+  });
+  document.getElementById('tokens-toggle').style.display  = tab === 'tokens' ? 'flex' : 'none';
+  document.getElementById('ywindow-toggle').style.display = (tab === 'tokens' && isRawView()) ? 'flex' : 'none';
+  document.getElementById('cost-toggle').style.display    = tab === 'cost'   ? 'flex' : 'none';
+  makeChart();
+}
+
+function setCostMode(mode) {
+  costMode = mode;
+  document.getElementById('btn-cost-delta').className = mode === 'delta' ? 'active' : '';
+  document.getElementById('btn-cost-total').className = mode === 'total' ? 'active' : '';
+  makeChart();
+}
+
+function setColorMode(mode) {
+  colorMode = mode;
+  document.getElementById('btn-session').className = mode === 'session' ? 'active' : '';
+  document.getElementById('btn-5h').className      = mode === '5h'      ? 'active' : '';
+  if (whoFilter !== 'all') makeSingleModeChart();
+  updateLegend();
+}
+
+function setWhoFilter(who) {
+  whoFilter = who;
+  document.querySelectorAll('.tab-bar .who-btn').forEach(b => {
+    b.className = 'who-btn' + (b.textContent === (who === 'all' ? 'All' : who) ? ' active' : '');
+  });
+  rows = who === 'all' ? allRows : allRows.filter(r => r.who === who);
+  document.getElementById('colormode-toggle').style.display = who === 'all' ? 'none' : 'flex';
+  makeChart();
+  updateStats();
+  updateLegend();
+}
+
+async function fetchAndRefresh() {
+  try {
+    const text = await (await fetch('token_usage.csv?t=' + Date.now())).text();
+    const newRows = parseCSV(text);
+    const changed = newRows.length !== allRows.length;
+    allRows = newRows;
+    allRows.forEach(r => { if (r.session) sessionColor(r.session); });
+    if (!defaultsApplied && allRows.length) { applyDynamicDefaults(); defaultsApplied = true; }   // pick openers once
+    rows = whoFilter === 'all' ? allRows : allRows.filter(r => r.who === whoFilter);
+    if (!chart || changed) makeChart();
+    if (limitMode === 'polling' && changed) fetchUsage();   // Polling: re-check usage when a new pip lands
+    updateStats();
+    updateLegend();
+    renderModelRow();
+    document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+    document.getElementById('live-indicator').className = 'live';
+  } catch (e) {
+    document.getElementById('live-indicator').className = 'live stale';
+    document.getElementById('updated').textContent = 'server unreachable';
+  }
+}
+
+// ===== AGENTS =====
+
+let agentRows = [], agentFilter = 'all';
+
+function parseAgentCSV(text) {
+  return text.trim().split('\n').filter(l => l.trim()).slice(1).map(line => {
+    const p = line.split(',');
+    return {
+      agentId:       (p[0] || '').trim(),
+      totalTokens:   parseInt(p[1]) || 0,
+      toolUses:      parseInt(p[2]) || 0,
+      cost:          parseFloat(p[3]) || 0,
+      cacheRatio:    parseFloat(p[4]) || 0,
+      model:         (p[5] || '').trim(),
+      date:          (p[6] || '').trim(),
+      time:          (p[7] || '').trim(),
+      parentSession: (p[8] || '').trim(),
+      parentWho:     WHO_ALIAS[(p[9] || '').trim()] || (p[9] || '').trim() || '?',
+    };
+  });
+}
+
+function setAgentFilter(who) {
+  agentFilter = who;
+  document.querySelectorAll('#agent-filter button').forEach(b => {
+    b.className = (b.textContent === 'All' ? who === 'all' : b.textContent === who) ? 'active' : '';
+  });
+  renderAgentChart();
+}
+
+function renderAgentChart() {
+  const filtered = agentFilter === 'all' ? agentRows : agentRows.filter(r => r.parentWho === agentFilter);
+  const canvas = document.getElementById('agent-chart');
+  if (!canvas) return;
+  if (agentChart) { agentChart.destroy(); agentChart = null; }
+  if (!filtered.length) return;
+
+  const whoSet = [...new Set(filtered.map(r => r.parentWho || '?'))];
+  const datasets = whoSet.map(who => {
+    const color = WHO_COLORS[who] || '#555';
+    return {
+      label: who,
+      data: filtered.filter(r => (r.parentWho || '?') === who).map(r => ({
+        x: new Date(`${r.date}T${r.time}`).getTime(),
+        y: r.totalTokens,
+        _r: r,
+      })),
+      backgroundColor: color + '99',
+      borderColor: color,
+      pointRadius: 7,
+      pointHoverRadius: 10,
+    };
+  });
+
+  agentChart = new Chart(canvas, {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const r = ctx.raw._r;
+              return [
+                `${ctx.dataset.label} — ${r.totalTokens.toLocaleString()} tokens`,
+                `tools: ${r.toolUses}  cost: $${r.cost.toFixed(4)}`,
+                `cache: ${(r.cacheRatio * 100).toFixed(1)}%  ${r.model.split('-')[0] || '-'}`,
+                '...' + r.agentId.slice(-10),
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: {
+            color: '#3a3a3a', font: { size: 8, family: 'Consolas' }, maxTicksLimit: 8,
+            callback: v => new Date(v).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }),
+          },
+          grid: { color: '#181818' }
+        },
+        y: {
+          ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' } },
+          grid: { color: '#181818' },
+          title: { display: true, text: 'tokens', color: '#444', font: { size: 9, family: 'Consolas' } }
+        }
+      }
+    }
+  });
+}
+
+async function fetchAgents() {
+  try {
+    const text = await (await fetch('agent_usage.csv?t=' + Date.now())).text();
+    const newRows = parseAgentCSV(text);
+    if (newRows.length !== agentRows.length) {
+      agentRows = newRows;
+      renderAgentChart();
+    }
+  } catch (e) {}
+}
+
+// ===== TIER FILES (LOD retention) =====
+// Coarse summaries the cwatch rollup writes when a billing week ages off. Empty until the first
+// weekly reset passes; a missing file 404s -> empty array -> displayRows just sums live pips.
+function parseTierCSV(text, perWho) {
+  return text.trim().split('\n').filter(l => l.trim()).slice(1).map(line => {
+    const p = line.split(',');
+    return {
+      ms:    parseInt(p[0]) || 0,
+      delta: parseFloat(p[1]) || 0,
+      cost:  parseFloat(p[2]) || 0,
+      cache: parseFloat(p[3]) || 0,
+      who:   perWho ? (WHO_ALIAS[(p[4] || '').trim()] || (p[4] || '?').trim()) : 'ALL',
+      n:     1,
+    };
+  }).filter(r => r.ms);
+}
+
+async function fetchTiers() {
+  let touched = false;
+  try { const t = await (await fetch('yastt_hourly.csv?t=' + Date.now())).text(); const h = parseTierCSV(t, true);  if (h.length !== hourlyTier.length) { hourlyTier = h; touched = true; } } catch (e) {}
+  try { const t = await (await fetch('yastt_weekly.csv?t=' + Date.now())).text(); const w = parseTierCSV(t, false); if (w.length !== weeklyTier.length) { weeklyTier = w; touched = true; } } catch (e) {}
+  if (touched && chart && !isRawView()) makeChart();   // refresh only the views that read tiers
+}
+
+buildFilterButtons();
+fetchAndRefresh();
+fetchAgents();
+fetchTiers();
+setLimitMode('polling');
+setInterval(fetchAndRefresh, 10000);
+setInterval(fetchAgents, 10000);
+setInterval(fetchTiers, 30000);
+</script>
+</body>
+</html>

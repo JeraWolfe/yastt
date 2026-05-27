@@ -1,0 +1,11 @@
+# Normalize line endings so the package works cross-platform.
+# Files that run on macOS/Linux must be LF; PowerShell stays CRLF for Windows.
+* text=auto
+*.sh    text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.html  text eol=lf
+*.ps1   text eol=crlf
+LICENSE text eol=lf
+NOTICE  text eol=lf

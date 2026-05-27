@@ -1,0 +1,15 @@
+{
+  "name": "yastt",
+  "owner": { "name": "Jera Wolfe" },
+  "metadata": {
+    "description": "DigitalDynamics3D -- YASTT token tracker for Claude Code.",
+    "version": "0.1.0-alpha"
+  },
+  "plugins": [
+    {
+      "name": "yastt",
+      "source": ".",
+      "description": "Local live token-usage dashboard for Claude Code (CLI + Desktop), with cost, cache, agents, and rate-limit budget."
+    }
+  ]
+}

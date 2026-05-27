@@ -1,0 +1,10 @@
+{
+  "name": "yastt",
+  "version": "0.1.0-alpha",
+  "description": "YASTT (Yet Another Simple Token Tracker) -- a local, live dashboard for your Claude Code token usage: context fill, per-exchange cost, cache efficiency, agent breakdown, and real rate-limit budget. Per-client (CLI / Desktop) lines, LOD time-zoom (5h / Day / Week / Full), and a dormant retention ladder that keeps the data file from growing forever.",
+  "author": { "name": "Jera Wolfe" },
+  "homepage": "https://github.com/JeraWolfe/yastt",
+  "repository": "https://github.com/JeraWolfe/yastt",
+  "license": "Apache-2.0",
+  "keywords": ["claude-code", "tokens", "usage", "cost", "dashboard", "monitoring", "rate-limit"]
+}
