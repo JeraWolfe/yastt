@@ -106,7 +106,7 @@ YASTT logs through **local** hooks, so it captures the clients running **on your
 
 ## Credits
 
-Created by **Jera Wolfe** · © 2026 **DigitalDynamics3D**.
+Created by **Jera Wolfe** · © 2026 **Jera Wolfe / Digital Dynamics 3D LLC**.
 Code written with **Claude (C‑Bug)** — Anthropic's Sonnet and Opus models used in its construction.
 
 Licensed under **Apache‑2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
