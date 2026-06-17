@@ -1,0 +1,205 @@
+diff --git a/hooks/subagent_stop.ps1 b/hooks/subagent_stop.ps1
+index dd960d0..1ad220b 100644
+--- a/hooks/subagent_stop.ps1
++++ b/hooks/subagent_stop.ps1
+@@ -28,6 +28,8 @@ $ctx_cr     = 0
+ $ctx_output = 0
+ $tool_uses  = 0
+ $model      = ""
++$min_ts     = $null
++$max_ts     = $null
+ 
+ if ($agent_transcript -and (Test-Path $agent_transcript)) {
+     $lines = Get-Content $agent_transcript -ErrorAction SilentlyContinue
+@@ -35,6 +37,14 @@ if ($agent_transcript -and (Test-Path $agent_transcript)) {
+         if ([string]::IsNullOrWhiteSpace($line)) { continue }
+         try {
+             $entry = $line | ConvertFrom-Json
++            # Track earliest and latest per-line ISO 8601 timestamp for Duration.
++            if ($entry.timestamp) {
++                try {
++                    $entry_ts = [DateTimeOffset]::Parse($entry.timestamp).UtcDateTime
++                    if ($null -eq $min_ts -or $entry_ts -lt $min_ts) { $min_ts = $entry_ts }
++                    if ($null -eq $max_ts -or $entry_ts -gt $max_ts) { $max_ts = $entry_ts }
++                } catch {}
++            }
+             if ($entry.type -eq "assistant" -and $entry.message.usage) {
+                 $u = $entry.message.usage
+                 $ctx_input  = if ($u.input_tokens)                { [long]$u.input_tokens }                else { 0 }
+@@ -55,6 +65,13 @@ if ($agent_transcript -and (Test-Path $agent_transcript)) {
+ $context_fill = $ctx_input + $ctx_cw + $ctx_cr
+ if ($context_fill -eq 0) { exit 0 }
+ 
++# Duration = whole ms between first and last transcript timestamp; 0 if unavailable.
++$duration = 0
++if ($null -ne $min_ts -and $null -ne $max_ts) {
++    $duration = [long][Math]::Round(($max_ts - $min_ts).TotalMilliseconds)
++    if ($duration -lt 0) { $duration = 0 }
++}
++
+ # Compute cost
+ $model_lower = $model.ToLower()
+ if ($model_lower -match 'opus') {
+@@ -102,7 +119,7 @@ $time_str = $now.ToString("HH:mm:ss")
+ $data_dir = Join-Path ([Environment]::GetFolderPath('UserProfile')) ".claude\yastt"
+ if (-not (Test-Path $data_dir)) { New-Item -ItemType Directory -Force -Path $data_dir | Out-Null }
+ $agent_log = Join-Path $data_dir "agent_usage.csv"
+-$agent_hdr = "AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho"
++$agent_hdr = "AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho,Duration"
+ $existing_ids = @()
+ 
+ if (-not (Test-Path $agent_log)) {
+@@ -117,5 +134,5 @@ if (-not (Test-Path $agent_log)) {
+ }
+ 
+ if ($agent_id -notin $existing_ids) {
+-    Add-Content $agent_log "$agent_id,$context_fill,$tool_uses,$cost_str,$cache_ratio,$model,$date_str,$time_str,$parent_session,$parentWho" -Encoding UTF8
++    Add-Content $agent_log "$agent_id,$context_fill,$tool_uses,$cost_str,$cache_ratio,$model,$date_str,$time_str,$parent_session,$parentWho,$duration" -Encoding UTF8
+ }
+diff --git a/hooks/subagent_stop.sh b/hooks/subagent_stop.sh
+index 2195eac..8fa725b 100644
+--- a/hooks/subagent_stop.sh
++++ b/hooks/subagent_stop.sh
+@@ -14,7 +14,7 @@ ptrans=$(printf '%s' "$payload" | jq -r '.transcript_path // empty')
+ psid=$(printf '%s' "$payload" | jq -r '.session_id // empty' | tr -d '-')
+ psession=${psid:0:8}; psession=${psession:-????????}
+ 
+-inp=0; cw=0; cr=0; out=0; model=""; tools=0
++inp=0; cw=0; cr=0; out=0; model=""; tools=0; duration=0
+ if [ -n "$atrans" ] && [ -f "$atrans" ]; then
+   last=$(jq -c 'select(.type=="assistant" and (.message.usage != null)) | {i:(.message.usage.input_tokens//0),cw:(.message.usage.cache_creation_input_tokens//0),cr:(.message.usage.cache_read_input_tokens//0),o:(.message.usage.output_tokens//0),m:(.message.model//"")}' "$atrans" 2>/dev/null | tail -n 1)
+   if [ -n "$last" ]; then
+@@ -23,6 +23,11 @@ if [ -n "$atrans" ] && [ -f "$atrans" ]; then
+     model=$(printf '%s' "$last" | jq -r '.m')
+   fi
+   tools=$(jq -r 'select(.type=="user") | (.message.content // []) | if type=="array" then ([.[]|select(.type=="tool_result")]|length) else 0 end' "$atrans" 2>/dev/null | awk '{s+=$1} END{print s+0}')
++  # Duration = whole ms between first and last per-line ISO 8601 timestamp; 0 if unavailable.
++  duration=$(jq -r 'select(.timestamp != null) | (.timestamp | fromdateiso8601) * 1000' "$atrans" 2>/dev/null | awk '
++    { if (NR==1 || $1<min) min=$1; if (NR==1 || $1>max) max=$1; n++ }
++    END { if (n>0) { d=max-min; if (d<0) d=0; printf "%d", d } else print 0 }')
++  case "${duration:-}" in ''|*[!0-9]*) duration=0;; esac
+ fi
+ 
+ fill=$((inp + cw + cr))
+@@ -50,10 +55,10 @@ case "$pep" in cli) pwho=CLI;; desktop|app) pwho=DESK;; web) pwho=WEB;; *) pwho=
+ 
+ data_dir="$HOME/.claude/yastt"; mkdir -p "$data_dir"
+ log="$data_dir/agent_usage.csv"
+-hdr="AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho"
++hdr="AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho,Duration"
+ [ -f "$log" ] || echo "$hdr" > "$log"
+ 
+ if ! cut -d',' -f1 "$log" | grep -qxF "$agent_id"; then
+-  echo "$agent_id,$fill,$tools,$cost,$cache,$model,$(date +%Y-%m-%d),$(date +%H:%M:%S),$psession,$pwho" >> "$log"
++  echo "$agent_id,$fill,$tools,$cost,$cache,$model,$(date +%Y-%m-%d),$(date +%H:%M:%S),$psession,$pwho,$duration" >> "$log"
+ fi
+ exit 0
+diff --git a/hooks/token_log.ps1 b/hooks/token_log.ps1
+index 6264b1f..4699402 100644
+--- a/hooks/token_log.ps1
++++ b/hooks/token_log.ps1
+@@ -104,31 +104,52 @@ if ($found) {
+     if (-not (Test-Path $data_dir)) { New-Item -ItemType Directory -Force -Path $data_dir | Out-Null }
+     $log_file = Join-Path $data_dir "token_usage.csv"
+     $header   = "TokenDelta,TokenTotal,Percentage,Date,Time,Flag,Session,Who,Model,Cost,CacheRatio"
+-    $prev_total = 0
++    $prev_total      = 0
++    $prev_row_found  = $false
+ 
+     if (-not (Test-Path $log_file)) {
+         Set-Content $log_file $header -Encoding UTF8
+     } else {
++        # Walk backward and find the most recent prior row of the SAME session AND SAME model.
++        # That row's TokenTotal (index 1) is the in-thread previous context fill.
+         $csv_lines = Get-Content $log_file -ErrorAction SilentlyContinue
+         for ($i = $csv_lines.Count - 1; $i -ge 0; $i--) {
+             $ln = $csv_lines[$i].Trim()
+-            if (-not [string]::IsNullOrWhiteSpace($ln) -and $ln -ne $header) {
+-                $parts = $ln.Split(',')
+-                if ($parts.Count -ge 2) {
+-                    try { $prev_total = [long]$parts[1] } catch { }
++            if ([string]::IsNullOrWhiteSpace($ln) -or $ln -eq $header) { continue }
++            $parts = $ln.Split(',')
++            if ($parts.Count -ge 9) {
++                $row_session = $parts[6].Trim()
++                $row_model   = $parts[8].Trim()
++                if ($row_session -eq $session_id -and $row_model -eq $last_model) {
++                    try { $prev_total = [long]$parts[1]; $prev_row_found = $true } catch { }
++                    break
+                 }
+-                break
+             }
+         }
+     }
+ 
+-    $delta = $context_fill - $prev_total
+-    $flag  = ""
+-    if ($delta -lt 0) {
++    if ($prev_row_found) {
++        $delta = $context_fill - $prev_total
++        $flag  = ""
++        if ($delta -lt 0) {
++            # Genuine in-thread context drop = a real compact.
++            $delta = $context_fill
++            $flag  = "C"
++        }
++    } else {
++        # New thread (first row for this session+model): no compact flag.
+         $delta = $context_fill
+-        $flag  = "C"
++        $flag  = ""
+     }
+ 
+-    Add-Content $log_file "$delta,$context_fill,$pct,$date_str,$time_str,$flag,$session_id,$who,$last_model,$cost_str,$cache_ratio" -Encoding UTF8
++    $row = "$delta,$context_fill,$pct,$date_str,$time_str,$flag,$session_id,$who,$last_model,$cost_str,$cache_ratio"
++    Add-Content $log_file $row -Encoding UTF8
++
++    # Append the SAME row to the never-scrubbed master log (append-only; no scrub/trim ever).
++    $master_log = Join-Path $data_dir "yastt_log.csv"
++    if (-not (Test-Path $master_log)) {
++        Set-Content $master_log $header -Encoding UTF8
++    }
++    Add-Content $master_log $row -Encoding UTF8
+ }
+ 
+diff --git a/hooks/token_log.sh b/hooks/token_log.sh
+index a47a600..90db938 100644
+--- a/hooks/token_log.sh
++++ b/hooks/token_log.sh
+@@ -43,13 +43,31 @@ pct=$(echo "$metrics" | cut -d' ' -f3)
+ 
+ data_dir="$HOME/.claude/yastt"; mkdir -p "$data_dir"
+ log="$data_dir/token_usage.csv"
++master_log="$data_dir/yastt_log.csv"
+ header="TokenDelta,TokenTotal,Percentage,Date,Time,Flag,Session,Who,Model,Cost,CacheRatio"
+ [ -f "$log" ] || echo "$header" > "$log"
+ 
+-prev=$(tail -n 1 "$log" | awk -F',' 'NF>=2{print $2}')
+-case "${prev:-}" in ''|*[!0-9]*) prev=0;; esac
+-delta=$((fill - prev)); flag=""
+-if [ "$delta" -lt 0 ]; then delta=$fill; flag="C"; fi
++# Walk the CSV backward and find the most recent prior row of the SAME session AND SAME model.
++# That row's TokenTotal (index 1, field 2) is the in-thread previous context fill.
++prev=$(awk -F',' -v want_session="$session" -v want_model="$model" '
++  NF>=9 && $7==want_session && $9==want_model { last=$2 }
++  END { if (last != "") print last }
++' "$log")
++prev_found=1
++case "${prev:-}" in ''|*[!0-9]*) prev=0; prev_found=0;; esac
+ 
+-echo "$delta,$fill,$pct,$(date +%Y-%m-%d),$(date +%H:%M:%S),$flag,$session,$who,$model,$cost,$cache" >> "$log"
++if [ "$prev_found" -eq 1 ]; then
++  delta=$((fill - prev)); flag=""
++  if [ "$delta" -lt 0 ]; then delta=$fill; flag="C"; fi
++else
++  # New thread (first row for this session+model): no compact flag.
++  delta=$fill; flag=""
++fi
++
++row="$delta,$fill,$pct,$(date +%Y-%m-%d),$(date +%H:%M:%S),$flag,$session,$who,$model,$cost,$cache"
++echo "$row" >> "$log"
++
++# Append the SAME row to the never-scrubbed master log (append-only; no scrub/trim ever).
++[ -f "$master_log" ] || echo "$header" > "$master_log"
++echo "$row" >> "$master_log"
+ exit 0

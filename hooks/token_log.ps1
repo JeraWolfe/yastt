@@ -104,31 +104,52 @@ if ($found) {
     if (-not (Test-Path $data_dir)) { New-Item -ItemType Directory -Force -Path $data_dir | Out-Null }
     $log_file = Join-Path $data_dir "token_usage.csv"
     $header   = "TokenDelta,TokenTotal,Percentage,Date,Time,Flag,Session,Who,Model,Cost,CacheRatio"
-    $prev_total = 0
+    $prev_total      = 0
+    $prev_row_found  = $false
 
     if (-not (Test-Path $log_file)) {
         Set-Content $log_file $header -Encoding UTF8
     } else {
+        # Walk backward and find the most recent prior row of the SAME session AND SAME model.
+        # That row's TokenTotal (index 1) is the in-thread previous context fill.
         $csv_lines = Get-Content $log_file -ErrorAction SilentlyContinue
         for ($i = $csv_lines.Count - 1; $i -ge 0; $i--) {
             $ln = $csv_lines[$i].Trim()
-            if (-not [string]::IsNullOrWhiteSpace($ln) -and $ln -ne $header) {
-                $parts = $ln.Split(',')
-                if ($parts.Count -ge 2) {
-                    try { $prev_total = [long]$parts[1] } catch { }
+            if ([string]::IsNullOrWhiteSpace($ln) -or $ln -eq $header) { continue }
+            $parts = $ln.Split(',')
+            if ($parts.Count -ge 9) {
+                $row_session = $parts[6].Trim()
+                $row_model   = $parts[8].Trim()
+                if ($row_session -eq $session_id -and $row_model -eq $last_model) {
+                    try { $prev_total = [long]$parts[1]; $prev_row_found = $true } catch { }
+                    break
                 }
-                break
             }
         }
     }
 
-    $delta = $context_fill - $prev_total
-    $flag  = ""
-    if ($delta -lt 0) {
+    if ($prev_row_found) {
+        $delta = $context_fill - $prev_total
+        $flag  = ""
+        if ($delta -lt 0) {
+            # Genuine in-thread context drop = a real compact.
+            $delta = $context_fill
+            $flag  = "C"
+        }
+    } else {
+        # New thread (first row for this session+model): no compact flag.
         $delta = $context_fill
-        $flag  = "C"
+        $flag  = ""
     }
 
-    Add-Content $log_file "$delta,$context_fill,$pct,$date_str,$time_str,$flag,$session_id,$who,$last_model,$cost_str,$cache_ratio" -Encoding UTF8
+    $row = "$delta,$context_fill,$pct,$date_str,$time_str,$flag,$session_id,$who,$last_model,$cost_str,$cache_ratio"
+    Add-Content $log_file $row -Encoding UTF8
+
+    # Append the SAME row to the never-scrubbed master log (append-only; no scrub/trim ever).
+    $master_log = Join-Path $data_dir "yastt_log.csv"
+    if (-not (Test-Path $master_log)) {
+        Set-Content $master_log $header -Encoding UTF8
+    }
+    Add-Content $master_log $row -Encoding UTF8
 }
 

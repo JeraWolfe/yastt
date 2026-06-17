@@ -1,0 +1,754 @@
+diff --git a/server/token_usage.html b/server/token_usage.html
+index 78fa0c7..f9b20a2 100644
+--- a/server/token_usage.html
++++ b/server/token_usage.html
+@@ -94,6 +94,16 @@
+   .mgauge.btn.active { border-color: #888; background: #1a1a1a; }
+   .mgauge.dim { cursor: default; }                                            /* no data: grey as the button */
+   .mgauge.dim .ml, .mgauge.dim .mv { color: #2c2c2c; }
++
++  /* Log tab: scrollable newest-first table replacing the chart area (item 5). */
++  .log-container { height: 320px; overflow-y: auto; width: 100%; }
++  .log-table { width: 100%; border-collapse: collapse; font-size: 0.62rem; }
++  .log-table th { position: sticky; top: 0; background: #0f0f0f; color: #555; text-transform: uppercase;
++    letter-spacing: 0.08em; text-align: left; padding: 6px 10px; border-bottom: 1px solid #1e1e1e; font-weight: normal; }
++  .log-table td { padding: 5px 10px; border-bottom: 1px solid #141414; color: #aaa; white-space: nowrap; }
++  .log-table tr:hover td { background: #141414; }
++  .log-table .compact-cell { color: #aa44ff; }
++  .log-empty { color: #333; padding: 20px; font-size: 0.7rem; }
+ </style>
+ </head>
+ <body>
+@@ -122,6 +132,9 @@
+   <div class="tab" id="tab-cache" style="--tab-color:#00ccbb" onclick="setTab('cache')">
+     <span class="icon">&#9889;&#65039;</span> Cache
+   </div>
++  <div class="tab" id="tab-log" style="--tab-color:#aa88ff" onclick="setTab('log')">
++    <span class="icon">&#128203;</span> Log
++  </div>
+   <div style="margin-left:auto;display:flex;gap:10px;align-items:flex-end;padding-bottom:4px">
+     <div class="mode-toggle" id="limitmode-toggle">
+       <button id="btn-lm-polling" class="active" onclick="setLimitMode('polling')">Polling</button>
+@@ -157,18 +170,20 @@
+         <button id="btn-tw-5h" onclick="setTimeWindow('5h')">5h</button>
+       </div>
+       <div class="mode-toggle" id="windowsback-toggle" style="display:none">
+-        <button id="btn-wb-expand" onclick="expandWindow(1)" title="include previous window">&#9664;&nbsp;&#9654;</button>
+-        <button id="btn-wb-contract" onclick="expandWindow(-1)" title="current window only">&#9654;&nbsp;&#9664;</button>
++        <button id="btn-wb-toggle" onclick="toggleWindowsBack()" title="include previous window">&#9664;&nbsp;&#9654; +Prev</button>
+       </div>
+       <div class="mode-toggle" id="colormode-toggle" style="display:none">
+         <button id="btn-session" class="active" onclick="setColorMode('session')">Session</button>
+-        <button id="btn-5h" onclick="setColorMode('5h')">5h Block</button>
++        <button id="btn-model" onclick="setColorMode('model')">Model</button>
+       </div>
+     </div>
+   </div>
+-  <div class="chart-container">
++  <div class="chart-container" id="chart-container">
+     <canvas id="chart"></canvas>
+   </div>
++  <div class="log-container" id="log-container" style="display:none">
++    <table class="log-table" id="log-table"></table>
++  </div>
+   <div class="legend" id="legend"></div>
+ </div>
+ 
+@@ -176,7 +191,7 @@
+   <div class="agent-header">
+     <div>
+       <div class="agent-title">Agents</div>
+-      <div class="agent-subtitle">Per-call token totals &middot; time vs tokens</div>
++      <div class="agent-subtitle">Length = duration &middot; thickness = context fill &middot; time-aligned</div>
+     </div>
+     <div class="who-btns" id="agent-filter"></div>
+   </div>
+@@ -207,6 +222,47 @@ const sessionColor = s => { if (!s) return '#555'; if (!(s in sessionColorMap))
+ const blockColor   = b => { if (!(b in blockColorMap)) blockColorMap[b] = PALETTE[blockIdx++ % PALETTE.length]; return blockColorMap[b]; };
+ const get5hBlock   = (d, t) => { if (!d || !t) return 0; return Math.floor(new Date(`${d}T${t}`).getTime() / (1000 * 60 * 60 * 5)); };
+ 
++// ── MODEL-MODE COLOR (item 7) ──────────────────────────────────────────────────────
++// Each model family gets one BASE HUE, auto-assigned in first-seen order. The sessions OF that
++// model render as shades of the base hue, spread across lightness + saturation so they separate.
++// N = sessions of that model in the CURRENT VISIBLE WINDOW; recomputed every render (modelShadeIndex).
++const MODEL_HUES = [0, 130, 215, 285, 45, 330];   // red, green, blue, purple, orange, magenta — first-seen order
++const modelHueMap = {};
++let modelHueIdx = 0;
++const modelHue = family => {
++  const key = family || 'other';
++  if (!(key in modelHueMap)) modelHueMap[key] = MODEL_HUES[modelHueIdx++ % MODEL_HUES.length];
++  return modelHueMap[key];
++};
++// modelShadeIndex: session -> {idx, count} for the visible window, rebuilt by recomputeModelShades().
++let modelShadeIndex = {};
++function recomputeModelShades(visibleRows) {
++  modelShadeIndex = {};
++  const byFamily = {};   // family -> ordered unique sessions in the window
++  visibleRows.forEach(r => {
++    const family = modelFamily(r.model) || 'other';
++    const session = r.session || '?';
++    const list = byFamily[family] || (byFamily[family] = []);
++    if (!list.includes(session)) list.push(session);
++  });
++  Object.keys(byFamily).forEach(family => {
++    const sessions = byFamily[family];
++    sessions.forEach((session, idx) => { modelShadeIndex[family + '|' + session] = { idx, count: sessions.length }; });
++  });
++}
++// HSL shade for a row in model mode: base hue of its model, lightness+saturation spread by its
++// session's slot within that model's session set in the visible window.
++function modelColor(r) {
++  const family = modelFamily(r.model) || 'other';
++  const hue = modelHue(family);
++  const slot = modelShadeIndex[family + '|' + (r.session || '?')] || { idx: 0, count: 1 };
++  const span = Math.max(1, slot.count);
++  const frac = span === 1 ? 0.5 : slot.idx / (span - 1);   // 0..1 across the model's sessions
++  const lightness  = 38 + frac * 34;   // 38%..72% — darker to lighter
++  const saturation = 85 - frac * 35;   // 85%..50% — vivid to muted, varying together with lightness
++  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
++}
++
+ let colorMode   = 'session';
+ let activeTab   = 'tokens';
+ let costMode    = 'total';   // default to Total (cumulative), matching the Tokens tab's Total/Delta order
+@@ -220,6 +276,7 @@ let defaultsApplied = false;  // dynamic openers picked from the data once on fi
+ let yWindowMode = '200k';
+ let yAuto       = true;       // y-scale still following the auto rule (false once the user clicks 200K/1M)
+ let allRows = [], rows = [];
++let logRows = [];             // every exchange from yastt_log.csv (never scrubbed); [] until the hook writes it
+ let chart = null, agentChart = null;
+ let chartStructKey = '';
+ let usageLimits = null;  // { fiveHourResetMs, weeklyResetMs, ...utilization } from /usage endpoint
+@@ -228,6 +285,7 @@ let limitTimer  = null;
+ let windowsBack = 0;          // 0 = current window only; +N = also show N previous windows (week/5h)
+ let whoDataStore  = {};
+ let singleRowRef  = [];
++let allTimeCost   = 0;        // account-wide cost across every exchange + weekly archive; window/filter-independent (item 8)
+ 
+ function buildAllTs() {
+   return [...new Set(allRows.map(r => `${r.date} ${r.time}`))].sort();
+@@ -307,6 +365,31 @@ function parseCSV(text) {
+   });
+   let running = 0;
+   parsed.forEach(r => { running += r.cost; r.costTotal = running; });
++  deriveCompacts(parsed);
++  return parsed;
++}
++
++// Re-derive compact markers from the data instead of trusting the stored Flag, which goes phantom
++// when interleaved sessions/models make a cross-thread delta look negative. A compact is an adjacent
++// SAME-session AND SAME-model point pair where the context total dropped. We walk each session/model
++// thread in clock order and flag a row when its total fell below the previous same-thread total.
++// rows that have no prior same-thread row fall back to the stored 'C' flag (can't re-derive).
++function deriveCompacts(parsed) {
++  const lastTotalByThread = {};   // session|model -> previous total in that thread
++  const ordered = parsed.slice().sort((a, b) => {
++    const am = new Date(`${a.date}T${a.time}`).getTime();
++    const bm = new Date(`${b.date}T${b.time}`).getTime();
++    return (isNaN(am) ? 0 : am) - (isNaN(bm) ? 0 : bm);
++  });
++  ordered.forEach(r => {
++    const threadKey = (r.session || '?') + '|' + (r.model || '?');
++    if (threadKey in lastTotalByThread) {
++      r.isCompact = r.total < lastTotalByThread[threadKey];   // context dropped within the thread -> real compact
++    } else {
++      r.isCompact = r.flag === 'C';                           // no prior same-thread row -> trust stored flag
++    }
++    lastTotalByThread[threadKey] = r.total;
++  });
+   return parsed;
+ }
+ 
+@@ -324,7 +407,7 @@ function updateStats() {
+     ['Cost',       '$' + totalCost.toFixed(4)],
+     ['Last Cost',  '$' + lastCost.toFixed(4)],
+     ['Avg Cache',  (avgCache * 100).toFixed(1) + '%'],
+-    ['Compacts',   src.filter(r => r.flag === 'C').length],
++    ['Compacts',   src.filter(r => r.isCompact).length],
+   ].map(([l, v]) => `<div class="stat"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
+ 
+   // Budget: only the overall 7D chip shows by default; clicking it reveals the per-model usage row.
+@@ -350,19 +433,24 @@ function updateLegend() {
+       + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
+     return;
+   }
+-  if (whoFilter === 'all' || colorMode === 'session') {
++  if (colorMode === 'model') {
++    // One swatch per model family (its base hue) + a note that shape encodes the client.
++    const families = [...new Set(rows.map(r => modelFamily(r.model) || 'other'))];
++    el.innerHTML = families.map(family => {
++      const hue = modelHue(family);
++      return `<div class="legend-item"><div class="legend-dot" style="background:hsl(${hue},70%,55%)"></div>${family} &middot; shades = sessions</div>`;
++    }).join('')
++      + `<div class="legend-item">&#9679; CLI &nbsp; &#9650; DESK</div>`
++      + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
++  } else {
+     const sessions = [...new Set(rows.map(r => r.session).filter(Boolean))];
+     const whoMap = {};
+     rows.forEach(r => { if (r.session && r.who) whoMap[r.session] = r.who; });
+     el.innerHTML = sessions.map(s =>
+       `<div class="legend-item"><div class="legend-dot" style="background:${sessionColor(s)}"></div>${s}${whoMap[s] ? ' (' + whoMap[s] + ')' : ''}</div>`
+-    ).join('') + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
+-  } else {
+-    const blocks = [...new Set(rows.map(r => get5hBlock(r.date, r.time)))].sort((a, b) => a - b);
+-    el.innerHTML = blocks.map(b => {
+-      const dt = new Date(b * 5 * 60 * 60 * 1000);
+-      return `<div class="legend-item"><div class="legend-dot" style="background:${blockColor(b)}"></div>${dt.toISOString().substring(11, 16)} block</div>`;
+-    }).join('') + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
++    ).join('')
++      + `<div class="legend-item">&#9679; CLI &nbsp; &#9650; DESK</div>`
++      + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
+   }
+ }
+ 
+@@ -384,6 +472,7 @@ const isRawView = () => timeWindow === '5h' || timeWindow === 'day';
+ let hourlyTier = [], weeklyTier = [];   // {ms, who, delta, cost, cache, n} — filled from tier CSVs
+ 
+ const hourStart = ms => Math.floor(ms / HOUR_MS) * HOUR_MS;
++const dayStart  = ms => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };  // local midnight; FULL fallback grain (item 2)
+ // Start of the billing week containing ms, aligned to the user's real weekly reset when known.
+ function weekStart(ms) {
+   if (usageLimits && usageLimits.weeklyResetMs) {
+@@ -431,7 +520,30 @@ function displayRows(srcRows) {
+     const tier = modelFilter !== 'all' ? [] : (whoFilter === 'all' ? hourlyTier : hourlyTier.filter(t => t.who === whoFilter));
+     return aggregate(mFilter(srcRows), hourStart, true, tier);
+   }
+-  if (timeWindow === 'full') return aggregate(mFilter(allRows), weekStart, false, modelFilter !== 'all' ? [] : weeklyTier);
++  if (timeWindow === 'full') {
++    const tier = modelFilter !== 'all' ? [] : weeklyTier;
++    const liveRows = mFilter(allRows);
++    const weekly = aggregate(liveRows, weekStart, false, tier);
++    // Item 2: weekly grain collapses to a single dot when there's < ~2 weeks of data ("shows nothing").
++    // When the live pips don't yet span multiple weeks, re-aggregate the LIVE portion at the FINEST
++    // grain that still yields a legible (>=2 point) series -- daily, then hourly -- so sub-week and even
++    // single-day data renders meaningfully. The permanent weekly ARCHIVE buckets (older, disjoint) are
++    // always prepended. This keeps the LOD design (archive stays weekly) and shows earliest-record -> now.
++    if (weekly.length >= 2 || !liveRows.length) return weekly;
++    let live = aggregate(liveRows, dayStart, false, []);
++    if (live.length < 2) live = aggregate(liveRows, hourStart, false, []);   // single calendar day -> go hourly
++    if (live.length < 2) live = aggregate(liveRows, ms => ms, false, []);    // single hour -> per-pip (identity bucket) so the series still reads
++    const archive = (tier || []).map(t => ({
++      delta: t.delta, total: 0, cost: t.cost, costTotal: 0,
++      cacheRatio: t.cache, who: 'ALL', session: null, model: '', flag: '',
++      _bucketMs: t.ms, _agg: true,
++    }));
++    const merged = [...archive, ...live].sort((a, b) => a._bucketMs - b._bucketMs);
++    // Re-run cumulative totals across the merged ALL series so Total/Delta still reads correctly.
++    let runDelta = 0, runCost = 0;
++    merged.forEach(e => { runDelta += e.delta; runCost += e.cost; e.total = runDelta; e.costTotal = runCost; });
++    return merged;
++  }
+   return mFilter(srcRows);
+ }
+ 
+@@ -439,8 +551,13 @@ function displayRows(srcRows) {
+ // raw pips keep the session / 5h-block palette.
+ function rowColor(r) {
+   if (r._agg) return r.who === 'ALL' ? '#cccccc' : (WHO_COLORS[r.who] || '#888');
+-  return colorMode === 'session' ? sessionColor(r.session) : blockColor(get5hBlock(r.date, r.time));
++  if (colorMode === 'model')   return modelColor(r);
++  if (colorMode === '5h')      return blockColor(get5hBlock(r.date, r.time));
++  return sessionColor(r.session);   // 'session' (default)
+ }
++
++// Marker SHAPE encodes the client/WHO (item 7): CLI = circle, DESK = triangle. Chart.js pointStyle.
++function whoPointStyle(who) { return who === WHO.desk ? 'triangle' : 'circle'; }
+ // ─────────────────────────────────────────────────────────────────────────────────
+ 
+ // 5h usage-window starts: a new window opens at the first time at/after the current window's
+@@ -469,6 +586,15 @@ function windowBounds() {
+     const earliest = times.length ? weekStart(times[0]) : weekStart(now);
+     const end = (usageLimits && usageLimits.weeklyResetMs)
+       ? currentWindowEnd(usageLimits.weeklyResetMs, WEEK_MS, now) : now;
++    // Item 2: when live data spans < 2 billing weeks, the series falls back to a finer (daily/hourly)
++    // grain (see displayRows). Tighten the window to the real data span (padded) so that fine series
++    // FILLS the view instead of clustering as a single dot at the far left of an empty multi-week axis.
++    const liveWeeks = new Set(times.map(weekStart));
++    if (times.length && liveWeeks.size < 2 && !weeklyTier.length) {
++      const span = Math.max(times[times.length - 1] - times[0], HOUR_MS);
++      const pad = span * 0.08;
++      return { min: times[0] - pad, max: times[times.length - 1] + pad };
++    }
+     return { min: earliest, max: end };
+   }
+   if (timeWindow === 'week') {
+@@ -529,7 +655,7 @@ function buildMarkers(min, max) {
+     });
+   }
+   allRows.forEach(r => {
+-    if (r.flag !== 'C') return;
++    if (!r.isCompact) return;   // re-derived compact (same session+model context drop), not the stored flag
+     const t = rowMs(r);
+     if (t >= min && t <= max) {
+       ann[`c_${t}`] = {
+@@ -557,8 +683,12 @@ function setTimeWindow(mode) {
+   if (mode === 'day') dayHours = (timeWindow === 'day') ? (dayHours === 24 ? 36 : 24) : 24;
+   timeWindow = mode;
+   windowsBack = 0;
++  const wbBtn = document.getElementById('btn-wb-toggle');
++  if (wbBtn) wbBtn.className = '';   // reset the +Prev toggle visual when the window changes
+   ['full', 'week', 'day', '5h'].forEach(w => document.getElementById('btn-tw-' + w).className = w === mode ? 'active' : '');
+   document.getElementById('windowsback-toggle').style.display = (mode === 'week' || mode === '5h') ? 'flex' : 'none';
++  // Color toggle (Session<->Model) is available in every raw view, regardless of who filter (item 7).
++  document.getElementById('colormode-toggle').style.display = isRawView() ? 'flex' : 'none';
+   document.getElementById('ywindow-toggle').style.display = (activeTab === 'tokens' && isRawView()) ? 'flex' : 'none';
+   // Full reads the WHO-stripped weekly archive -> the WHO filter is inert; force All and grey the bar.
+   const wf = document.getElementById('who-filter');
+@@ -569,12 +699,17 @@ function setTimeWindow(mode) {
+   makeChart();
+   updateStats();    // top numbers are scoped to the window, so re-tally on window change
+   updateLegend();   // legend keys off the grain (session vs WHO), so refresh it on window change
++  renderAgentChart();   // agents are time-aligned to the top window (item 3) -> re-render on window change
+ }
+ 
+-function expandWindow(delta) {
+-  windowsBack = Math.max(0, Math.min(1, windowsBack + delta));  // one step back max (one day / one week)
++// Single toggle (item 4): flip windowsBack 0<->1 and reflect the state on the button.
++function toggleWindowsBack() {
++  windowsBack = windowsBack ? 0 : 1;   // 0 = current window only; 1 = also include the previous window
++  const btn = document.getElementById('btn-wb-toggle');
++  if (btn) btn.className = windowsBack ? 'active' : '';
+   makeChart();
+   updateStats();
++  renderAgentChart();   // window changed -> realign the time-aligned agent bars (item 3)
+ }
+ 
+ // ── DYNAMIC DEFAULTS ───────────────────────────────────────────────────────────────
+@@ -623,6 +758,7 @@ function syncWindowButtons() {
+   document.getElementById('btn-ywindow-200k').className = yWindowMode === '200k' ? 'active' : '';
+   document.getElementById('btn-ywindow-1m').className   = yWindowMode === '1m'   ? 'active' : '';
+   document.getElementById('windowsback-toggle').style.display = (timeWindow === 'week' || timeWindow === '5h') ? 'flex' : 'none';
++  document.getElementById('colormode-toggle').style.display   = isRawView() ? 'flex' : 'none';
+   document.getElementById('ywindow-toggle').style.display     = (activeTab === 'tokens' && isRawView()) ? 'flex' : 'none';
+   document.getElementById('chart-subtitle').textContent = subtitleText();
+ }
+@@ -678,6 +814,7 @@ function render(datasets, min, max, annotations, makeOpts) {
+       ds.segment = nd.segment;
+       ds.pointBackgroundColor = nd.pointBackgroundColor;
+       ds.pointBorderColor = nd.pointBorderColor;
++      ds.pointStyle = nd.pointStyle;
+     });
+     chart.options.scales.x.min = min;
+     chart.options.scales.x.max = max;
+@@ -710,6 +847,9 @@ function makeAllModeChart() {
+     };
+   }
+ 
++  // Model mode shades each session of a model; N = sessions of that model in the VISIBLE window.
++  if (isRawView()) recomputeModelShades(src);
++
+   const whoSet = [...new Set(src.map(r => r.who))];
+   whoDataStore = {};
+   const datasets = whoSet.map(who => {
+@@ -719,10 +859,18 @@ function makeAllModeChart() {
+     whoDataStore[who] = pts;
+     return {
+       label: who, data: pts,
+-      segment: { borderColor: ctx => { const p = pts[ctx.p0DataIndex]; return p ? rowColor(p._r) : 'transparent'; } },
++      // Item 1: break the stroke at session boundaries -- transparent connector when the segment's two
++      // endpoints belong to different sessions, so each session is an isolated trace (points stay).
++      segment: { borderColor: ctx => {
++        const p0 = pts[ctx.p0DataIndex], p1 = pts[ctx.p1DataIndex];
++        if (!p0 || !p1) return 'transparent';
++        if (p0._r.session !== p1._r.session) return 'transparent';
++        return rowColor(p0._r);
++      } },
+       borderWidth: 1.5,
+       pointBackgroundColor: pts.map(p => rowColor(p._r)),
+       pointBorderColor:     pts.map(p => rowColor(p._r)),
++      pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
+       pointRadius: 4, pointHoverRadius: 6,
+       tension: 0.15, fill: false,
+     };
+@@ -737,6 +885,7 @@ function makeAllModeChart() {
+ function makeSingleModeChart() {
+   const { min, max } = windowBounds();
+   const src = displayRows(rows);
++  if (isRawView()) recomputeModelShades(src);   // item 7: model shades over the visible window
+   const pts = src
+     .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
+     .sort((a, b) => a.x - b.x);
+@@ -744,10 +893,17 @@ function makeSingleModeChart() {
+ 
+   const dataset = {
+     data: pts,
+-    segment: { borderColor: ctx => { const p = pts[ctx.p0DataIndex]; return p ? rowColor(p._r) : 'transparent'; } },
++    // Item 1: transparent connector across session boundaries -> isolated per-session traces.
++    segment: { borderColor: ctx => {
++      const p0 = pts[ctx.p0DataIndex], p1 = pts[ctx.p1DataIndex];
++      if (!p0 || !p1) return 'transparent';
++      if (p0._r.session !== p1._r.session) return 'transparent';
++      return rowColor(p0._r);
++    } },
+     borderWidth: 1.5,
+     pointBackgroundColor: pts.map(p => rowColor(p._r)),
+     pointBorderColor:     pts.map(p => rowColor(p._r)),
++    pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
+     pointRadius: 4, pointHoverRadius: 6,
+     tension: 0.15, fill: false,
+   };
+@@ -809,6 +965,7 @@ async function fetchUsage() {
+     updateStats();
+     renderModelRow();
+     if (chart) makeChart();
++    renderAgentChart();   // agent x-axis aligns to the same window the usage reset defines (item 3)
+   } catch (e) {}
+ }
+ 
+@@ -816,6 +973,17 @@ async function fetchUsage() {
+ // Per-model 7D gauges that double as model filters. A tile is LIT (clickable) when that model has
+ // rows in the file; greyed + "—" + unclickable when it doesn't. Endpoint util fills the bar/number
+ // when present (Opus can be lit-but-"—" when the endpoint withholds its number). 5H is info-only.
++// All-time account cost (item 8): every exchange in the master log + the weekly archive's cost,
++// across ALL models, independent of the current window and every filter. Until yastt_log.csv exists,
++// fall back to the loaded pip costs (allRows). weeklyTier rows are disjoint from live pips post-scrub.
++function updateAllTimeCost() {
++  const pipSource = logRows.length ? logRows : allRows;
++  const pipCost = pipSource.reduce((sum, r) => sum + (r.cost || 0), 0);
++  const archiveCost = weeklyTier.reduce((sum, t) => sum + (t.cost || 0), 0);
++  allTimeCost = pipCost + archiveCost;
++  return allTimeCost;
++}
++
+ function renderModelRow() {
+   const row = document.getElementById('limit-row');
+   if (!row) return;
+@@ -835,12 +1003,16 @@ function renderModelRow() {
+     const barInner = v == null ? '' : `<div style="width:${Math.min(100, v)}%;background:${barCol(v)}"></div>`;
+     return `<div class="${cls}"${click}><div class="ml">${label}</div><div class="mv">${v == null ? '—' : v.toFixed(0) + '%'}</div><div class="mbar">${barInner}</div></div>`;
+   };
++  updateAllTimeCost();
++  // All-time total cost tile: account-wide, every exchange + archive, ignores window and all filters (item 8).
++  const allTimeTile = `<div class="mgauge"><div class="ml">All-Time Cost</div><div class="mv">$${allTimeCost.toFixed(2)}</div><div class="mbar"></div></div>`;
+   row.innerHTML =
+     tile('5H', u.fiveHourUtil, null) +        // window gauge (info only)
+     tile('All 7D', u.weeklyUtil, 'all') +     // clears the model filter
+     tile('Opus', u.opusUtil, 'opus') +
+     tile('Sonnet', u.sonnetUtil, 'sonnet') +
+-    tile('Haiku', null, 'haiku');
++    tile('Haiku', null, 'haiku') +
++    allTimeTile;
+ }
+ 
+ function setModelFilter(key) {
+@@ -862,17 +1034,59 @@ function toggleLimits() {
+ 
+ function setTab(tab) {
+   activeTab = tab;
+-  document.getElementById('chart-title').textContent    = TABS[tab].title;
+-  document.getElementById('chart-subtitle').textContent = subtitleText();
+-  ['tokens', 'cost', 'cache'].forEach(id => {
++  ['tokens', 'cost', 'cache', 'log'].forEach(id => {
+     document.getElementById(`tab-${id}`).className = 'tab' + (id === tab ? ' active' : '');
+   });
++  const isLog = tab === 'log';
++  // Log view swaps the chart canvas + its surrounding chrome for the scrollable table.
++  document.getElementById('chart-container').style.display = isLog ? 'none' : 'block';
++  document.getElementById('log-container').style.display   = isLog ? 'block' : 'none';
++  document.getElementById('legend').style.display          = isLog ? 'none' : 'flex';
++  ['tokens-toggle', 'ywindow-toggle', 'cost-toggle', 'timewindow-toggle', 'windowsback-toggle', 'colormode-toggle'].forEach(id => {
++    if (isLog) document.getElementById(id).style.display = 'none';
++  });
++  if (isLog) {
++    document.getElementById('chart-title').textContent    = 'Log';
++    document.getElementById('chart-subtitle').textContent = 'Every exchange · newest first';
++    renderLogTable();
++    return;
++  }
++  document.getElementById('chart-title').textContent    = TABS[tab].title;
++  document.getElementById('chart-subtitle').textContent = subtitleText();
++  document.getElementById('timewindow-toggle').style.display = 'flex';
+   document.getElementById('tokens-toggle').style.display  = tab === 'tokens' ? 'flex' : 'none';
+   document.getElementById('ywindow-toggle').style.display = (tab === 'tokens' && isRawView()) ? 'flex' : 'none';
+   document.getElementById('cost-toggle').style.display    = tab === 'cost'   ? 'flex' : 'none';
++  document.getElementById('windowsback-toggle').style.display = (timeWindow === 'week' || timeWindow === '5h') ? 'flex' : 'none';
++  document.getElementById('colormode-toggle').style.display   = isRawView() ? 'flex' : 'none';
+   makeChart();
+ }
+ 
++// Render the master log newest-first. logRows is chronological (append order); we reverse a copy for
++// display only -- storage order is never mutated. Falls back to allRows until yastt_log.csv exists.
++function renderLogTable() {
++  const table = document.getElementById('log-table');
++  const source = logRows.length ? logRows : allRows;
++  if (!source.length) { table.innerHTML = `<tr><td class="log-empty">No log data yet.</td></tr>`; return; }
++  const header = `<tr><th>Time</th><th>Session</th><th>Who</th><th>Model</th><th>Delta</th><th>Total</th><th>Cost</th><th>Cache</th><th>Compact</th></tr>`;
++  const body = source.slice().reverse().map(r => {
++    const when = `${r.date} ${(r.time || '').substring(0, 8)}`;
++    const compact = r.isCompact ? '<span class="compact-cell">C</span>' : '';
++    return `<tr>`
++      + `<td>${when}</td>`
++      + `<td>${r.session || '-'}</td>`
++      + `<td>${r.who || '?'}</td>`
++      + `<td>${r.model || '-'}</td>`
++      + `<td>${(r.delta || 0).toLocaleString()}</td>`
++      + `<td>${(r.total || 0).toLocaleString()}</td>`
++      + `<td>$${(r.cost || 0).toFixed(4)}</td>`
++      + `<td>${((r.cacheRatio || 0) * 100).toFixed(1)}%</td>`
++      + `<td>${compact}</td>`
++      + `</tr>`;
++  }).join('');
++  table.innerHTML = header + body;
++}
++
+ function setCostMode(mode) {
+   costMode = mode;
+   document.getElementById('btn-cost-delta').className = mode === 'delta' ? 'active' : '';
+@@ -883,8 +1097,8 @@ function setCostMode(mode) {
+ function setColorMode(mode) {
+   colorMode = mode;
+   document.getElementById('btn-session').className = mode === 'session' ? 'active' : '';
+-  document.getElementById('btn-5h').className      = mode === '5h'      ? 'active' : '';
+-  if (whoFilter !== 'all') makeSingleModeChart();
++  document.getElementById('btn-model').className   = mode === 'model'   ? 'active' : '';
++  makeChart();   // applies in both all-mode and single-mode now (toggle is who-filter independent, item 7)
+   updateLegend();
+ }
+ 
+@@ -894,12 +1108,27 @@ function setWhoFilter(who) {
+     b.className = 'who-btn' + (b.textContent === (who === 'all' ? 'All' : who) ? ' active' : '');
+   });
+   rows = who === 'all' ? allRows : allRows.filter(r => r.who === who);
+-  document.getElementById('colormode-toggle').style.display = who === 'all' ? 'none' : 'flex';
++  // Color toggle is who-filter independent now; shown in every raw view (item 7).
++  document.getElementById('colormode-toggle').style.display = isRawView() ? 'flex' : 'none';
+   makeChart();
+   updateStats();
+   updateLegend();
+ }
+ 
++// The never-scrubbed master log. Same schema as token_usage.csv -> reuse parseCSV. 404 / empty -> [].
++async function fetchLog() {
++  try {
++    const resp = await fetch('yastt_log.csv?t=' + Date.now());
++    if (!resp.ok) { logRows = []; return; }
++    const text = await resp.text();
++    const newRows = parseCSV(text);
++    const changed = newRows.length !== logRows.length;
++    logRows = newRows;
++    if (changed && activeTab === 'log') renderLogTable();
++    if (changed) { updateAllTimeCost(); if (limitsOpen) renderModelRow(); }
++  } catch (e) { logRows = []; }
++}
++
+ async function fetchAndRefresh() {
+   try {
+     const text = await (await fetch('token_usage.csv?t=' + Date.now())).text();
+@@ -911,6 +1140,8 @@ async function fetchAndRefresh() {
+     rows = whoFilter === 'all' ? allRows : allRows.filter(r => r.who === whoFilter);
+     if (!chart || changed) makeChart();
+     if (limitMode === 'polling' && changed) fetchUsage();   // Polling: re-check usage when a new pip lands
++    updateAllTimeCost();   // refresh the fallback (loaded pips) when no master log exists yet (item 8)
++    if (activeTab === 'log') renderLogTable();   // log falls back to allRows until yastt_log.csv exists
+     updateStats();
+     updateLegend();
+     renderModelRow();
+@@ -940,6 +1171,7 @@ function parseAgentCSV(text) {
+       time:          (p[7] || '').trim(),
+       parentSession: (p[8] || '').trim(),
+       parentWho:     WHO_ALIAS[(p[9] || '').trim()] || (p[9] || '').trim() || '?',
++      duration:      parseInt(p[10]) || 0,   // ms the agent ran; old rows lack the column -> 0 (item 3)
+     };
+   });
+ }
+@@ -952,68 +1184,144 @@ function setAgentFilter(who) {
+   renderAgentChart();
+ }
+ 
++// Item 3: agents render as horizontal Gantt-style bars. Each agent is one bar whose x-extent is
++// [start, start + duration] (length = wall-clock time used) and whose THICKNESS is proportional to
++// ContextFill (token count). Thickness-encodes-tokens on a time axis is non-standard, so the bars are
++// drawn by a custom plugin (ganttBarsPlugin) over a linear time x-axis aligned to the TOP chart's
++// [min,max] window, with the SAME 5h/compact markers overlaid via the annotation plugin (buildMarkers).
++// Color + marker convention mirror the top chart: color by parentWho, CLI = flat bar, DESK = bar with
++// a triangular cap drawn at its leading edge (shape encodes the client, item 7).
++let agentBarHitboxes = [];   // {x0,x1,yTop,yBot,row} for tooltip hit-testing, rebuilt each draw
++
++const ganttBarsPlugin = {
++  id: 'ganttBars',
++  afterDatasetsDraw(targetChart, args, pluginOptions) {
++    const bars = pluginOptions.bars || [];
++    const ctx = targetChart.ctx;
++    const xScale = targetChart.scales.x;
++    const area = targetChart.chartArea;
++    agentBarHitboxes = [];
++    if (!bars.length) return;
++    const maxFill = Math.max(1, ...bars.map(bar => bar.row.totalTokens));
++    const laneHeight = (area.bottom - area.top) / bars.length;
++    const maxThickness = Math.min(laneHeight * 0.8, 26);
++    const minThickness = 4;
++    bars.forEach((bar, lane) => {
++      const startMs = bar.startMs;
++      const endMs = bar.startMs + Math.max(bar.row.duration, 0);
++      let x0 = xScale.getPixelForValue(startMs);
++      let x1 = xScale.getPixelForValue(endMs);
++      if (x1 < x0 + 2) x1 = x0 + 2;   // floor width so zero-duration agents still show as a sliver
++      const laneCenter = area.top + laneHeight * (lane + 0.5);
++      const thickness = minThickness + (maxThickness - minThickness) * (bar.row.totalTokens / maxFill);
++      const yTop = laneCenter - thickness / 2;
++      const yBot = laneCenter + thickness / 2;
++      const color = WHO_COLORS[bar.row.parentWho] || '#555';
++      ctx.save();
++      ctx.fillStyle = color + 'aa';
++      ctx.strokeStyle = color;
++      ctx.lineWidth = 1;
++      ctx.fillRect(x0, yTop, x1 - x0, thickness);
++      ctx.strokeRect(x0, yTop, x1 - x0, thickness);
++      // Shape cue (item 7): DESK gets a triangular cap at the bar's leading edge; CLI stays a plain bar.
++      if (bar.row.parentWho === WHO.desk) {
++        ctx.fillStyle = color;
++        ctx.beginPath();
++        ctx.moveTo(x1, yTop);
++        ctx.lineTo(x1 + thickness * 0.6, laneCenter);
++        ctx.lineTo(x1, yBot);
++        ctx.closePath();
++        ctx.fill();
++      }
++      ctx.restore();
++      agentBarHitboxes.push({ x0, x1, yTop, yBot, row: bar.row, startMs, endMs });
++    });
++  }
++};
++
+ function renderAgentChart() {
+   const filtered = agentFilter === 'all' ? agentRows : agentRows.filter(r => r.parentWho === agentFilter);
+   const canvas = document.getElementById('agent-chart');
+   if (!canvas) return;
+   if (agentChart) { agentChart.destroy(); agentChart = null; }
+-  if (!filtered.length) return;
++  if (!filtered.length) { agentBarHitboxes = []; return; }
+ 
+-  const whoSet = [...new Set(filtered.map(r => r.parentWho || '?'))];
+-  const datasets = whoSet.map(who => {
+-    const color = WHO_COLORS[who] || '#555';
+-    return {
+-      label: who,
+-      data: filtered.filter(r => (r.parentWho || '?') === who).map(r => ({
+-        x: new Date(`${r.date}T${r.time}`).getTime(),
+-        y: r.totalTokens,
+-        _r: r,
+-      })),
+-      backgroundColor: color + '99',
+-      borderColor: color,
+-      pointRadius: 7,
+-      pointHoverRadius: 10,
+-    };
+-  });
++  // Align the agent x-axis to the TOP chart's current window and overlay the same markers (item 3).
++  const { min, max } = windowBounds();
++  const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
++
++  // Sort agents by start time so lanes read top-to-bottom chronologically.
++  const bars = filtered.map(r => ({ startMs: new Date(`${r.date}T${r.time}`).getTime(), row: r }))
++    .filter(bar => !isNaN(bar.startMs))
++    .sort((a, b) => a.startMs - b.startMs);
+ 
+   agentChart = new Chart(canvas, {
+     type: 'scatter',
+-    data: { datasets },
++    data: { datasets: [{ data: [], parsing: false }] },   // bars are custom-drawn; no native points
+     options: {
+       responsive: true, maintainAspectRatio: false, animation: false,
+       plugins: {
+         legend: { display: false },
+-        tooltip: {
+-          callbacks: {
+-            label: ctx => {
+-              const r = ctx.raw._r;
+-              return [
+-                `${ctx.dataset.label} — ${r.totalTokens.toLocaleString()} tokens`,
+-                `tools: ${r.toolUses}  cost: $${r.cost.toFixed(4)}`,
+-                `cache: ${(r.cacheRatio * 100).toFixed(1)}%  ${r.model.split('-')[0] || '-'}`,
+-                '...' + r.agentId.slice(-10),
+-              ];
+-            }
+-          }
+-        }
++        ganttBars: { bars },
++        annotation: { annotations },
++        tooltip: { enabled: false }   // custom hit-tested tooltip (agentBarMouseMove); native points don't exist
+       },
+       scales: {
+         x: {
+-          type: 'linear',
++          type: 'linear', min, max,
+           ticks: {
+-            color: '#3a3a3a', font: { size: 8, family: 'Consolas' }, maxTicksLimit: 8,
++            color: '#3a3a3a', font: { size: 8, family: 'Consolas' }, maxTicksLimit: 12, maxRotation: 0,
+             callback: v => new Date(v).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }),
+           },
+           grid: { color: '#181818' }
+         },
+         y: {
+-          ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' } },
+-          grid: { color: '#181818' },
+-          title: { display: true, text: 'tokens', color: '#444', font: { size: 9, family: 'Consolas' } }
++          min: 0, max: 1, display: false,
++          grid: { display: false },
++          title: { display: true, text: 'context fill = thickness', color: '#444', font: { size: 9, family: 'Consolas' } }
+         }
+       }
+-    }
++    },
++    plugins: [ganttBarsPlugin]
+   });
++
++  // Bars are custom-drawn (no native points), so wire our own hit-tested tooltip via mousemove.
++  // bind once: a flag on the canvas prevents stacking listeners across re-renders.
++  if (!canvas._ganttTipBound) {
++    canvas.addEventListener('mousemove', agentBarMouseMove);
++    canvas.addEventListener('mouseleave', () => { const tip = document.getElementById('agent-tooltip'); if (tip) tip.style.opacity = '0'; });
++    canvas._ganttTipBound = true;
++  }
++}
++
++// Custom tooltip for the Gantt bars: hit-test the cursor (canvas-local px) against the drawn hitboxes.
++function agentBarMouseMove(evt) {
++  const canvas = document.getElementById('agent-chart');
++  let tipEl = document.getElementById('agent-tooltip');
++  if (!tipEl) {
++    tipEl = document.createElement('div');
++    tipEl.id = 'agent-tooltip';
++    tipEl.style.cssText = 'position:absolute;pointer-events:none;background:#000;border:1px solid #333;'
++      + 'color:#ccc;font:0.6rem Consolas,monospace;padding:6px 8px;border-radius:3px;white-space:nowrap;'
++      + 'z-index:200;opacity:0;transition:opacity 0.1s;';
++    document.body.appendChild(tipEl);
++  }
++  const canvasRect = canvas.getBoundingClientRect();
++  const pointerX = evt.clientX - canvasRect.left;
++  const pointerY = evt.clientY - canvasRect.top;
++  const hit = agentBarHitboxes.find(box => pointerX >= box.x0 - 4 && pointerX <= box.x1 + 6 && pointerY >= box.yTop - 3 && pointerY <= box.yBot + 3);
++  if (!hit) { tipEl.style.opacity = '0'; return; }
++  const r = hit.row;
++  const durSec = r.duration / 1000;
++  tipEl.innerHTML = [
++    `${r.parentWho} — ${r.totalTokens.toLocaleString()} tokens`,
++    `dur: ${durSec >= 1 ? durSec.toFixed(1) + 's' : r.duration + 'ms'}  cost: $${r.cost.toFixed(4)}`,
++    `cache: ${(r.cacheRatio * 100).toFixed(1)}%  ${(r.model || '').split('-')[0] || '-'}`,
++    '...' + r.agentId.slice(-10),
++  ].map(line => `<div>${line}</div>`).join('');
++  tipEl.style.opacity = '1';
++  tipEl.style.left = (window.scrollX + canvasRect.left + pointerX + 12) + 'px';
++  tipEl.style.top = (window.scrollY + canvasRect.top + pointerY) + 'px';
+ }
+ 
+ async function fetchAgents() {
+@@ -1048,15 +1356,18 @@ async function fetchTiers() {
+   let touched = false;
+   try { const t = await (await fetch('yastt_hourly.csv?t=' + Date.now())).text(); const h = parseTierCSV(t, true);  if (h.length !== hourlyTier.length) { hourlyTier = h; touched = true; } } catch (e) {}
+   try { const t = await (await fetch('yastt_weekly.csv?t=' + Date.now())).text(); const w = parseTierCSV(t, false); if (w.length !== weeklyTier.length) { weeklyTier = w; touched = true; } } catch (e) {}
++  if (touched) { updateAllTimeCost(); if (limitsOpen) renderModelRow(); }   // archive cost feeds all-time (item 8)
+   if (touched && chart && !isRawView()) makeChart();   // refresh only the views that read tiers
+ }
+ 
+ buildFilterButtons();
+ fetchAndRefresh();
++fetchLog();
+ fetchAgents();
+ fetchTiers();
+ setLimitMode('polling');
+ setInterval(fetchAndRefresh, 10000);
++setInterval(fetchLog, 10000);
+ setInterval(fetchAgents, 10000);
+ setInterval(fetchTiers, 30000);
+ </script>

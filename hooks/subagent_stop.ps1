@@ -28,6 +28,8 @@ $ctx_cr     = 0
 $ctx_output = 0
 $tool_uses  = 0
 $model      = ""
+$min_ts     = $null
+$max_ts     = $null
 
 if ($agent_transcript -and (Test-Path $agent_transcript)) {
     $lines = Get-Content $agent_transcript -ErrorAction SilentlyContinue
@@ -35,6 +37,14 @@ if ($agent_transcript -and (Test-Path $agent_transcript)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
             $entry = $line | ConvertFrom-Json
+            # Track earliest and latest per-line ISO 8601 timestamp for Duration.
+            if ($entry.timestamp) {
+                try {
+                    $entry_ts = [DateTimeOffset]::Parse($entry.timestamp).UtcDateTime
+                    if ($null -eq $min_ts -or $entry_ts -lt $min_ts) { $min_ts = $entry_ts }
+                    if ($null -eq $max_ts -or $entry_ts -gt $max_ts) { $max_ts = $entry_ts }
+                } catch {}
+            }
             if ($entry.type -eq "assistant" -and $entry.message.usage) {
                 $u = $entry.message.usage
                 $ctx_input  = if ($u.input_tokens)                { [long]$u.input_tokens }                else { 0 }
@@ -54,6 +64,13 @@ if ($agent_transcript -and (Test-Path $agent_transcript)) {
 
 $context_fill = $ctx_input + $ctx_cw + $ctx_cr
 if ($context_fill -eq 0) { exit 0 }
+
+# Duration = whole ms between first and last transcript timestamp; 0 if unavailable.
+$duration = 0
+if ($null -ne $min_ts -and $null -ne $max_ts) {
+    $duration = [long][Math]::Round(($max_ts - $min_ts).TotalMilliseconds)
+    if ($duration -lt 0) { $duration = 0 }
+}
 
 # Compute cost
 $model_lower = $model.ToLower()
@@ -102,7 +119,7 @@ $time_str = $now.ToString("HH:mm:ss")
 $data_dir = Join-Path ([Environment]::GetFolderPath('UserProfile')) ".claude\yastt"
 if (-not (Test-Path $data_dir)) { New-Item -ItemType Directory -Force -Path $data_dir | Out-Null }
 $agent_log = Join-Path $data_dir "agent_usage.csv"
-$agent_hdr = "AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho"
+$agent_hdr = "AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho,Duration"
 $existing_ids = @()
 
 if (-not (Test-Path $agent_log)) {
@@ -117,5 +134,5 @@ if (-not (Test-Path $agent_log)) {
 }
 
 if ($agent_id -notin $existing_ids) {
-    Add-Content $agent_log "$agent_id,$context_fill,$tool_uses,$cost_str,$cache_ratio,$model,$date_str,$time_str,$parent_session,$parentWho" -Encoding UTF8
+    Add-Content $agent_log "$agent_id,$context_fill,$tool_uses,$cost_str,$cache_ratio,$model,$date_str,$time_str,$parent_session,$parentWho,$duration" -Encoding UTF8
 }

@@ -14,7 +14,7 @@ ptrans=$(printf '%s' "$payload" | jq -r '.transcript_path // empty')
 psid=$(printf '%s' "$payload" | jq -r '.session_id // empty' | tr -d '-')
 psession=${psid:0:8}; psession=${psession:-????????}
 
-inp=0; cw=0; cr=0; out=0; model=""; tools=0
+inp=0; cw=0; cr=0; out=0; model=""; tools=0; duration=0
 if [ -n "$atrans" ] && [ -f "$atrans" ]; then
   last=$(jq -c 'select(.type=="assistant" and (.message.usage != null)) | {i:(.message.usage.input_tokens//0),cw:(.message.usage.cache_creation_input_tokens//0),cr:(.message.usage.cache_read_input_tokens//0),o:(.message.usage.output_tokens//0),m:(.message.model//"")}' "$atrans" 2>/dev/null | tail -n 1)
   if [ -n "$last" ]; then
@@ -23,6 +23,11 @@ if [ -n "$atrans" ] && [ -f "$atrans" ]; then
     model=$(printf '%s' "$last" | jq -r '.m')
   fi
   tools=$(jq -r 'select(.type=="user") | (.message.content // []) | if type=="array" then ([.[]|select(.type=="tool_result")]|length) else 0 end' "$atrans" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  # Duration = whole ms between first and last per-line ISO 8601 timestamp; 0 if unavailable.
+  duration=$(jq -r 'select(.timestamp != null) | (.timestamp | fromdateiso8601) * 1000' "$atrans" 2>/dev/null | awk '
+    { if (NR==1 || $1<min) min=$1; if (NR==1 || $1>max) max=$1; n++ }
+    END { if (n>0) { d=max-min; if (d<0) d=0; printf "%d", d } else print 0 }')
+  case "${duration:-}" in ''|*[!0-9]*) duration=0;; esac
 fi
 
 fill=$((inp + cw + cr))
@@ -50,10 +55,10 @@ case "$pep" in cli) pwho=CLI;; desktop|app) pwho=DESK;; web) pwho=WEB;; *) pwho=
 
 data_dir="$HOME/.claude/yastt"; mkdir -p "$data_dir"
 log="$data_dir/agent_usage.csv"
-hdr="AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho"
+hdr="AgentId,ContextFill,ToolUses,Cost,CacheRatio,Model,Date,Time,ParentSession,ParentWho,Duration"
 [ -f "$log" ] || echo "$hdr" > "$log"
 
 if ! cut -d',' -f1 "$log" | grep -qxF "$agent_id"; then
-  echo "$agent_id,$fill,$tools,$cost,$cache,$model,$(date +%Y-%m-%d),$(date +%H:%M:%S),$psession,$pwho" >> "$log"
+  echo "$agent_id,$fill,$tools,$cost,$cache,$model,$(date +%Y-%m-%d),$(date +%H:%M:%S),$psession,$pwho,$duration" >> "$log"
 fi
 exit 0

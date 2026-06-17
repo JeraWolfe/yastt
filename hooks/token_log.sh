@@ -43,13 +43,31 @@ pct=$(echo "$metrics" | cut -d' ' -f3)
 
 data_dir="$HOME/.claude/yastt"; mkdir -p "$data_dir"
 log="$data_dir/token_usage.csv"
+master_log="$data_dir/yastt_log.csv"
 header="TokenDelta,TokenTotal,Percentage,Date,Time,Flag,Session,Who,Model,Cost,CacheRatio"
 [ -f "$log" ] || echo "$header" > "$log"
 
-prev=$(tail -n 1 "$log" | awk -F',' 'NF>=2{print $2}')
-case "${prev:-}" in ''|*[!0-9]*) prev=0;; esac
-delta=$((fill - prev)); flag=""
-if [ "$delta" -lt 0 ]; then delta=$fill; flag="C"; fi
+# Walk the CSV backward and find the most recent prior row of the SAME session AND SAME model.
+# That row's TokenTotal (index 1, field 2) is the in-thread previous context fill.
+prev=$(awk -F',' -v want_session="$session" -v want_model="$model" '
+  NF>=9 && $7==want_session && $9==want_model { last=$2 }
+  END { if (last != "") print last }
+' "$log")
+prev_found=1
+case "${prev:-}" in ''|*[!0-9]*) prev=0; prev_found=0;; esac
 
-echo "$delta,$fill,$pct,$(date +%Y-%m-%d),$(date +%H:%M:%S),$flag,$session,$who,$model,$cost,$cache" >> "$log"
+if [ "$prev_found" -eq 1 ]; then
+  delta=$((fill - prev)); flag=""
+  if [ "$delta" -lt 0 ]; then delta=$fill; flag="C"; fi
+else
+  # New thread (first row for this session+model): no compact flag.
+  delta=$fill; flag=""
+fi
+
+row="$delta,$fill,$pct,$(date +%Y-%m-%d),$(date +%H:%M:%S),$flag,$session,$who,$model,$cost,$cache"
+echo "$row" >> "$log"
+
+# Append the SAME row to the never-scrubbed master log (append-only; no scrub/trim ever).
+[ -f "$master_log" ] || echo "$header" > "$master_log"
+echo "$row" >> "$master_log"
 exit 0
