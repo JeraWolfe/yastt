@@ -11,3 +11,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 .playwright-mcp/
+
+# Scratch / exploration artifacts (not shipped)
+SCRATCH/
+/yastt_full.png
+/yastt_week.png
+/yastt_5h.png
