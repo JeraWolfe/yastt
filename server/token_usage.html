@@ -284,6 +284,7 @@ let limitMode   = 'polling';  // 'polling' = check on load/toggle; 'realtime' = 
 let limitTimer  = null;
 let windowsBack = 0;          // 0 = current window only; +N = also show N previous windows (week/5h)
 let whoDataStore  = {};
+let sessionDataStore = {};   // session key -> its plotted points; one line per session (raw views)
 let singleRowRef  = [];
 let allTimeCost   = 0;        // account-wide cost across every exchange + weekly archive; window/filter-independent (item 8)
 
@@ -834,6 +835,39 @@ function render(datasets, min, max, annotations, makeOpts) {
   }
 }
 
+// One dataset PER SESSION KEY: each session's points, time-ordered, draw as their own line —
+// so points link WITHIN a session and never connect ACROSS sessions, even when sessions interleave
+// in time (the per-WHO-with-transparent-segments approach failed for concurrent sessions). Color is
+// the session/shade color via the segment callback (render() copies ds.segment on in-place update).
+function buildSessionDatasets(src) {
+  sessionDataStore = {};
+  const sessions = [...new Set(src.map(r => r.session).filter(Boolean))];
+  return sessions.map(sess => {
+    const pts = src.filter(r => r.session === sess)
+      .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
+      .sort((a, b) => a.x - b.x);
+    sessionDataStore[sess] = pts;
+    return {
+      label: sess, data: pts,
+      segment: { borderColor: ctx => { const p0 = pts[ctx.p0DataIndex]; return p0 ? rowColor(p0._r) : 'transparent'; } },
+      borderWidth: 1.5,
+      pointBackgroundColor: pts.map(p => rowColor(p._r)),
+      pointBorderColor:     pts.map(p => rowColor(p._r)),
+      pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
+      pointRadius: 4, pointHoverRadius: 6, tension: 0.15, fill: false,
+    };
+  });
+}
+
+// Tooltip row lookup that works for both raw (per-session) and aggregated (per-WHO) datasets.
+function rowFromItems(items) {
+  const it = items[0];
+  if (!it) return null;
+  const store = isRawView() ? sessionDataStore : whoDataStore;
+  const arr = store[it.dataset.label];
+  return (arr && arr[it.dataIndex] && arr[it.dataIndex]._r) || null;
+}
+
 function makeAllModeChart() {
   const { min, max } = windowBounds();
   const src = displayRows(allRows);
@@ -850,63 +884,53 @@ function makeAllModeChart() {
   // Model mode shades each session of a model; N = sessions of that model in the VISIBLE window.
   if (isRawView()) recomputeModelShades(src);
 
-  const whoSet = [...new Set(src.map(r => r.who))];
-  whoDataStore = {};
-  const datasets = whoSet.map(who => {
-    const pts = src.filter(r => r.who === who)
-      .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
-      .sort((a, b) => a.x - b.x);
-    whoDataStore[who] = pts;
-    return {
-      label: who, data: pts,
-      // Item 1: break the stroke at session boundaries -- transparent connector when the segment's two
-      // endpoints belong to different sessions, so each session is an isolated trace (points stay).
-      segment: { borderColor: ctx => {
-        const p0 = pts[ctx.p0DataIndex], p1 = pts[ctx.p1DataIndex];
-        if (!p0 || !p1) return 'transparent';
-        if (p0._r.session !== p1._r.session) return 'transparent';
-        return rowColor(p0._r);
-      } },
-      borderWidth: 1.5,
-      pointBackgroundColor: pts.map(p => rowColor(p._r)),
-      pointBorderColor:     pts.map(p => rowColor(p._r)),
-      pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
-      pointRadius: 4, pointHoverRadius: 6,
-      tension: 0.15, fill: false,
-    };
-  });
+  let datasets;
+  if (isRawView()) {
+    datasets = buildSessionDatasets(src);   // one line per session: links within, isolates across (item 1)
+  } else {
+    // Aggregated (week/full): one series per WHO (rows are bucket sums, session-less).
+    const whoSet = [...new Set(src.map(r => r.who))];
+    whoDataStore = {};
+    datasets = whoSet.map(who => {
+      const pts = src.filter(r => r.who === who)
+        .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
+        .sort((a, b) => a.x - b.x);
+      whoDataStore[who] = pts;
+      return {
+        label: who, data: pts,
+        segment: { borderColor: ctx => { const p0 = pts[ctx.p0DataIndex]; return p0 ? rowColor(p0._r) : 'transparent'; } },
+        borderWidth: 1.5,
+        pointBackgroundColor: pts.map(p => rowColor(p._r)),
+        pointBorderColor:     pts.map(p => rowColor(p._r)),
+        pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
+        pointRadius: 4, pointHoverRadius: 6, tension: 0.15, fill: false,
+      };
+    });
+  }
 
-  render(datasets, min, max, annotations, () => baseOptions(min, max, items => {
-    const p = whoDataStore[items[0]?.dataset?.label]?.[items[0]?.dataIndex];
-    return p && p._r;
-  }));
+  render(datasets, min, max, annotations, () => baseOptions(min, max, rowFromItems));
 }
 
 function makeSingleModeChart() {
   const { min, max } = windowBounds();
   const src = displayRows(rows);
   if (isRawView()) recomputeModelShades(src);   // item 7: model shades over the visible window
-  const pts = src
-    .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
-    .sort((a, b) => a.x - b.x);
-  singleRowRef = pts;
-
-  const dataset = {
-    data: pts,
-    // Item 1: transparent connector across session boundaries -> isolated per-session traces.
-    segment: { borderColor: ctx => {
-      const p0 = pts[ctx.p0DataIndex], p1 = pts[ctx.p1DataIndex];
-      if (!p0 || !p1) return 'transparent';
-      if (p0._r.session !== p1._r.session) return 'transparent';
-      return rowColor(p0._r);
-    } },
-    borderWidth: 1.5,
-    pointBackgroundColor: pts.map(p => rowColor(p._r)),
-    pointBorderColor:     pts.map(p => rowColor(p._r)),
-    pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
-    pointRadius: 4, pointHoverRadius: 6,
-    tension: 0.15, fill: false,
-  };
+  let datasets;
+  if (isRawView()) {
+    datasets = buildSessionDatasets(src);   // one line per session: links within, isolates across (item 1)
+  } else {
+    const pts = src.map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r })).sort((a, b) => a.x - b.x);
+    singleRowRef = pts;
+    datasets = [{
+      data: pts,
+      segment: { borderColor: ctx => { const p0 = pts[ctx.p0DataIndex]; return p0 ? rowColor(p0._r) : 'transparent'; } },
+      borderWidth: 1.5,
+      pointBackgroundColor: pts.map(p => rowColor(p._r)),
+      pointBorderColor:     pts.map(p => rowColor(p._r)),
+      pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
+      pointRadius: 4, pointHoverRadius: 6, tension: 0.15, fill: false,
+    }];
+  }
 
   const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
   if (activeTab === 'tokens' && isRawView()) {
@@ -917,7 +941,8 @@ function makeSingleModeChart() {
     };
   }
 
-  render([dataset], min, max, annotations, () => baseOptions(min, max, items => {
+  render(datasets, min, max, annotations, () => baseOptions(min, max, items => {
+    if (isRawView()) return rowFromItems(items);
     const p = singleRowRef[items[0]?.dataIndex];
     return p && p._r;
   }));
