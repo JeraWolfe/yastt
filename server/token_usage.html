@@ -223,17 +223,12 @@ const blockColor   = b => { if (!(b in blockColorMap)) blockColorMap[b] = PALETT
 const get5hBlock   = (d, t) => { if (!d || !t) return 0; return Math.floor(new Date(`${d}T${t}`).getTime() / (1000 * 60 * 60 * 5)); };
 
 // ── MODEL-MODE COLOR (item 7) ──────────────────────────────────────────────────────
-// Each model family gets one BASE HUE, auto-assigned in first-seen order. The sessions OF that
-// model render as shades of the base hue, spread across lightness + saturation so they separate.
-// N = sessions of that model in the CURRENT VISIBLE WINDOW; recomputed every render (modelShadeIndex).
-const MODEL_HUES = [0, 130, 215, 285, 45, 330];   // red, green, blue, purple, orange, magenta — first-seen order
-const modelHueMap = {};
-let modelHueIdx = 0;
-const modelHue = family => {
-  const key = family || 'other';
-  if (!(key in modelHueMap)) modelHueMap[key] = MODEL_HUES[modelHueIdx++ % MODEL_HUES.length];
-  return modelHueMap[key];
-};
+// Each model family gets one FIXED BASE HUE: opus=green, sonnet=blue, fable=yellow, haiku=magenta
+// (unknown families fall back to red). The sessions OF that model render as shades of the base hue,
+// spread across lightness + saturation so they separate. N = sessions of that model in the CURRENT
+// VISIBLE WINDOW; recomputed every render (modelShadeIndex).
+const MODEL_HUE_MAP = { opus: 130, sonnet: 210, fable: 50, haiku: 300, other: 0 };
+const modelHue = family => { const key = family || 'other'; return MODEL_HUE_MAP[key] != null ? MODEL_HUE_MAP[key] : MODEL_HUE_MAP.other; };
 // modelShadeIndex: session -> {idx, count} for the visible window, rebuilt by recomputeModelShades().
 let modelShadeIndex = {};
 function recomputeModelShades(visibleRows) {
@@ -509,7 +504,7 @@ function aggregate(srcRows, bucketFn, perWho, tier) {
 // Model family from a model id, e.g. 'claude-opus-4-7' -> 'opus'. '' when unknown/aggregated.
 function modelFamily(m) {
   m = (m || '').toLowerCase();
-  return m.includes('opus') ? 'opus' : m.includes('sonnet') ? 'sonnet' : m.includes('haiku') ? 'haiku' : (m ? 'other' : '');
+  return m.includes('opus') ? 'opus' : m.includes('sonnet') ? 'sonnet' : m.includes('haiku') ? 'haiku' : m.includes('fable') ? 'fable' : (m ? 'other' : '');
 }
 // Apply the model filter at the SOURCE (raw pips), so it flows through to every view's aggregation.
 const mFilter = arr => modelFilter === 'all' ? arr : arr.filter(r => modelFamily(r.model) === modelFilter);
