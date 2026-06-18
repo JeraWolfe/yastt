@@ -3,7 +3,7 @@
   "owner": { "name": "Jera Wolfe" },
   "metadata": {
     "description": "Digital Dynamics 3D LLC -- YASTT token tracker for Claude Code.",
-    "version": "0.1.0-alpha"
+    "version": "0.2.0-alpha"
   },
   "plugins": [
     {
