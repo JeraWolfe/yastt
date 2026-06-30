@@ -1155,7 +1155,8 @@ const ganttBarsPlugin = {
       const thickness = minThickness + (maxThickness - minThickness) * (bar.row.totalTokens / maxFill);
       const yTop = laneCenter - thickness / 2;
       const yBot = laneCenter + thickness / 2;
-      const color = WHO_COLORS[bar.row.parentWho] || '#555';
+      // Color by PARENT SESSION (matches the top chart's session palette); shape still encodes WHO below.
+      const color = bar.row.parentSession ? sessionColor(bar.row.parentSession) : (WHO_COLORS[bar.row.parentWho] || '#555');
       ctx.save();
       ctx.fillStyle = color + 'aa';
       ctx.strokeStyle = color;
@@ -1252,8 +1253,9 @@ function agentBarMouseMove(evt) {
   if (!hit) { tipEl.style.opacity = '0'; return; }
   const r = hit.row;
   const durSec = r.duration / 1000;
+  const sessColor = r.parentSession ? sessionColor(r.parentSession) : '#888';
   tipEl.innerHTML = [
-    `${r.parentWho} — ${r.totalTokens.toLocaleString()} tokens`,
+    `<span style="color:${sessColor}">${r.parentSession || '?'}</span> (${r.parentWho}) — ${r.totalTokens.toLocaleString()} tokens`,
     `dur: ${durSec >= 1 ? durSec.toFixed(1) + 's' : r.duration + 'ms'}  cost: $${r.cost.toFixed(4)}`,
     `cache: ${(r.cacheRatio * 100).toFixed(1)}%  ${(r.model || '').split('-')[0] || '-'}`,
     '...' + r.agentId.slice(-10),
