@@ -224,3 +224,18 @@ http.createServer(async (req, res) => {
 // compacts + scrubs only when one has. No-ops on young data (nothing past a retention window yet).
 runRollup();
 setInterval(runRollup, ROLLUP_INTERVAL);
+
+// Continuous calibration sampling: poll /usage on a clock so (utilization %, local-token) pairs bank
+// even with NO local activity -- e.g. during a cloud Designer/cmonkey session, where no local hooks
+// fire and the browser wouldn't otherwise poll. Independent of the dashboard. Also refreshes usageCache
+// so the dashboard mostly serves these fetches instead of adding its own. 5h bucket is the one we watch.
+const SAMPLE_INTERVAL = 60000;   // 60s
+async function sampleTick() {
+  try {
+    const body = await fetchUsage();
+    usageCache = { body, at: Date.now() };
+    logUtilSample(body, Date.now());
+  } catch (e) {}
+}
+sampleTick();
+setInterval(sampleTick, SAMPLE_INTERVAL);
