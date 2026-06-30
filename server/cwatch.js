@@ -55,13 +55,16 @@ const HOUR_MS = 3600000;
 const WEEK_MS = 7 * 24 * HOUR_MS;
 const ROLLUP_INTERVAL = 24 * HOUR_MS;
 const F = {
-  pips:   path.join(DATA_DIR, 'token_usage.csv'),
-  hourly: path.join(DATA_DIR, 'yastt_hourly.csv'),
-  weekly: path.join(DATA_DIR, 'yastt_weekly.csv'),
-  state:  path.join(DATA_DIR, 'yastt_rollup_state.json'),
+  pips:    path.join(DATA_DIR, 'token_usage.csv'),
+  hourly:  path.join(DATA_DIR, 'yastt_hourly.csv'),
+  weekly:  path.join(DATA_DIR, 'yastt_weekly.csv'),
+  state:   path.join(DATA_DIR, 'yastt_rollup_state.json'),
+  log:     path.join(DATA_DIR, 'yastt_log.csv'),              // never-scrubbed master log (source for cumulative local tokens)
+  samples: path.join(DATA_DIR, 'yastt_util_samples.csv'),     // calibration pairs: utilization % vs cumulative local tokens
 };
-const HOURLY_HEADER = 'HourStart,DeltaSum,CostSum,CacheAvg,Who';
-const WEEKLY_HEADER = 'WeekStart,DeltaSum,CostSum,CacheAvg';
+const HOURLY_HEADER  = 'HourStart,DeltaSum,CostSum,CacheAvg,Who';
+const WEEKLY_HEADER  = 'WeekStart,DeltaSum,CostSum,CacheAvg';
+const SAMPLES_HEADER = 'Iso,Ms,FiveHourPct,SevenDayPct,OpusPct,SonnetPct,LocalTotalDelta,LocalOpusDelta,LocalSonnetDelta';
 
 const readLines     = file => { try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim()); } catch (e) { return []; } };
 const pipMs         = c => { const ms = new Date(`${(c[3]||'').trim()}T${(c[4]||'').trim()}`).getTime(); return isNaN(ms) ? null : ms; };
@@ -69,6 +72,31 @@ const hourStartMs   = ms => Math.floor(ms / HOUR_MS) * HOUR_MS;
 const weekStartMs   = (ms, anchor) => anchor + Math.floor((ms - anchor) / WEEK_MS) * WEEK_MS;
 const loadState     = () => { try { return JSON.parse(fs.readFileSync(F.state, 'utf8')); } catch (e) { return {}; } };
 const saveState     = s  => { try { fs.writeFileSync(F.state, JSON.stringify(s)); } catch (e) {} };
+
+// Calibration sampling for cloud/Designer estimation. On each FRESH /usage poll, snapshot the paired
+// triple: the utilization %s next to the cumulative LOCAL TokenDelta (overall + per model) read from
+// the never-scrubbed master log. Append-only; never scrubbed. Differences between consecutive samples
+// give (Δlocal tokens, Δutilization %) pairs, which a later estimator fits to tokens-per-% (per model)
+// and uses to back out untracked (cloud/Designer) consumption from the residual. Designer is Opus-only,
+// so the opus columns are the load-bearing ones. Never throws into the request path (caller wraps it).
+function logUtilSample(body, nowMs) {
+  let usage; try { usage = JSON.parse(body); } catch (e) { return; }
+  if (!usage || usage.error) return;
+  const pct = bucket => (bucket && bucket.utilization != null) ? bucket.utilization : '';
+  let lines = readLines(F.log); if (lines.length <= 1) lines = readLines(F.pips);   // master log preferred; pips fallback
+  let total = 0, opus = 0, sonnet = 0;
+  for (const line of lines.slice(1)) {
+    const cols  = line.split(',');
+    const delta = parseInt(cols[0]) || 0;          // TokenDelta
+    const model = (cols[8] || '').toLowerCase();   // Model
+    total += delta;
+    if (model.includes('opus')) opus += delta;
+    else if (model.includes('sonnet')) sonnet += delta;
+  }
+  const row = `${new Date(nowMs).toISOString()},${nowMs},${pct(usage.five_hour)},${pct(usage.seven_day)},${pct(usage.seven_day_opus)},${pct(usage.seven_day_sonnet)},${total},${opus},${sonnet}`;
+  if (!fs.existsSync(F.samples)) fs.writeFileSync(F.samples, SAMPLES_HEADER + '\n');
+  fs.appendFileSync(F.samples, row + '\n');
+}
 
 // Roll one completed week's raw pips into hourly per-WHO sums, then scrub those pips. Idempotent.
 function compactPipsWeek(ws) {
@@ -168,6 +196,7 @@ http.createServer(async (req, res) => {
     try {
       const body = await fetchUsage();
       usageCache = { body, at: now };
+      try { logUtilSample(body, now); } catch (e) {}   // bank a calibration pair on each fresh poll; never break the response
       res.writeHead(200); res.end(body);
     } catch (e) {
       if (usageCache.body) { res.writeHead(200); res.end(usageCache.body); }      // serve stale rather than fail
