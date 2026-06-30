@@ -1190,9 +1190,11 @@ function renderAgentChart() {
   const { min, max } = windowBounds();
   const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
 
-  // Sort agents by start time so lanes read top-to-bottom chronologically.
+  // Lane ONLY the agents whose bar intersects the current window, then sort by start time. Keeps lane
+  // height from being crushed by out-of-window history so in-window bars stay legible.
   const bars = filtered.map(r => ({ startMs: new Date(`${r.date}T${r.time}`).getTime(), row: r }))
     .filter(bar => !isNaN(bar.startMs))
+    .filter(bar => (bar.startMs + Math.max(bar.row.duration || 0, 0)) >= min && bar.startMs <= max)
     .sort((a, b) => a.startMs - b.startMs);
 
   agentChart = new Chart(canvas, {
