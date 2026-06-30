@@ -418,17 +418,7 @@ function updateStats() {
 
 function updateLegend() {
   const el = document.getElementById('legend');
-  // Aggregated views color by WHO (week) or a single condensed series (full) -- not by session.
-  if (!isRawView()) {
-    if (timeWindow === 'full') {
-      el.innerHTML = `<div class="legend-item"><div class="legend-dot" style="background:#cccccc"></div>weekly total &middot; all</div>`;
-      return;
-    }
-    const whos = [...new Set(rows.map(r => r.who).filter(Boolean))];
-    el.innerHTML = whos.map(w => `<div class="legend-item"><div class="legend-dot" style="background:${WHO_COLORS[w] || '#888'}"></div>${w} &middot; per hour</div>`).join('')
-      + `<div class="legend-item"><div class="legend-dash"></div>compact</div>`;
-    return;
-  }
+  // Per-session (or per-model shade) legend in every window -- display is never WHO/weekly-merged now.
   if (colorMode === 'model') {
     // One swatch per model family (its base hue) + a note that shape encodes the client.
     const families = [...new Set(rows.map(r => modelFamily(r.model) || 'other'))];
@@ -512,34 +502,9 @@ const mFilter = arr => modelFilter === 'all' ? arr : arr.filter(r => modelFamily
 // The rows a view plots. Week = hourly per-WHO; full = weekly WHO-stripped (single ALL series).
 // Tier files carry no model breakdown, so a model filter drops them (raw pips only while filtering).
 function displayRows(srcRows) {
-  if (timeWindow === 'week') {
-    const tier = modelFilter !== 'all' ? [] : (whoFilter === 'all' ? hourlyTier : hourlyTier.filter(t => t.who === whoFilter));
-    return aggregate(mFilter(srcRows), hourStart, true, tier);
-  }
-  if (timeWindow === 'full') {
-    const tier = modelFilter !== 'all' ? [] : weeklyTier;
-    const liveRows = mFilter(allRows);
-    const weekly = aggregate(liveRows, weekStart, false, tier);
-    // Item 2: weekly grain collapses to a single dot when there's < ~2 weeks of data ("shows nothing").
-    // When the live pips don't yet span multiple weeks, re-aggregate the LIVE portion at the FINEST
-    // grain that still yields a legible (>=2 point) series -- daily, then hourly -- so sub-week and even
-    // single-day data renders meaningfully. The permanent weekly ARCHIVE buckets (older, disjoint) are
-    // always prepended. This keeps the LOD design (archive stays weekly) and shows earliest-record -> now.
-    if (weekly.length >= 2 || !liveRows.length) return weekly;
-    let live = aggregate(liveRows, dayStart, false, []);
-    if (live.length < 2) live = aggregate(liveRows, hourStart, false, []);   // single calendar day -> go hourly
-    if (live.length < 2) live = aggregate(liveRows, ms => ms, false, []);    // single hour -> per-pip (identity bucket) so the series still reads
-    const archive = (tier || []).map(t => ({
-      delta: t.delta, total: 0, cost: t.cost, costTotal: 0,
-      cacheRatio: t.cache, who: 'ALL', session: null, model: '', flag: '',
-      _bucketMs: t.ms, _agg: true,
-    }));
-    const merged = [...archive, ...live].sort((a, b) => a._bucketMs - b._bucketMs);
-    // Re-run cumulative totals across the merged ALL series so Total/Delta still reads correctly.
-    let runDelta = 0, runCost = 0;
-    merged.forEach(e => { runDelta += e.delta; runCost += e.cost; e.total = runDelta; e.costTotal = runCost; });
-    return merged;
-  }
+  // Display individual sessions in EVERY window (no WHO/weekly merge) -- "just display for now" (Jera).
+  // The aggregate()/tier machinery stays in the file for storage/retention; it's just not used for the
+  // chart anymore. windowBounds() still clips the x-axis to the chosen window.
   return mFilter(srcRows);
 }
 
@@ -667,8 +632,6 @@ function buildMarkers(min, max) {
 function subtitleText() {
   let s;
   if (activeTab !== 'tokens') s = TABS[activeTab].subtitle;
-  else if (timeWindow === 'week') s = 'Tokens consumed per hour';
-  else if (timeWindow === 'full') s = 'Tokens consumed per billing week';
   else s = tokensMode === 'delta' ? 'Tokens added per exchange' : 'Context window fill over time';
   if (timeWindow === 'day') s += dayHours === 36 ? '  ·  36h (+ previous 12h)' : '  ·  24h';
   return s;
@@ -683,15 +646,14 @@ function setTimeWindow(mode) {
   if (wbBtn) wbBtn.className = '';   // reset the +Prev toggle visual when the window changes
   ['full', 'week', 'day', '5h'].forEach(w => document.getElementById('btn-tw-' + w).className = w === mode ? 'active' : '');
   document.getElementById('windowsback-toggle').style.display = (mode === 'week' || mode === '5h') ? 'flex' : 'none';
-  // Color toggle (Session<->Model) is available in every raw view, regardless of who filter (item 7).
-  document.getElementById('colormode-toggle').style.display = isRawView() ? 'flex' : 'none';
+  // Color toggle (Session<->Model) is available in every window (display is per-session everywhere now).
+  document.getElementById('colormode-toggle').style.display = 'flex';
   document.getElementById('ywindow-toggle').style.display = (activeTab === 'tokens' && isRawView()) ? 'flex' : 'none';
-  // Full reads the WHO-stripped weekly archive -> the WHO filter is inert; force All and grey the bar.
+  // Full shows per-session data too now, so the WHO filter works in every window.
   const wf = document.getElementById('who-filter');
-  wf.style.opacity = mode === 'full' ? '0.35' : '1';
-  wf.style.pointerEvents = mode === 'full' ? 'none' : 'auto';
+  wf.style.opacity = '1';
+  wf.style.pointerEvents = 'auto';
   document.getElementById('chart-subtitle').textContent = subtitleText();
-  if (mode === 'full' && whoFilter !== 'all') { setWhoFilter('all'); return; }  // setWhoFilter re-renders
   makeChart();
   updateStats();    // top numbers are scoped to the window, so re-tally on window change
   updateLegend();   // legend keys off the grain (session vs WHO), so refresh it on window change
@@ -754,7 +716,7 @@ function syncWindowButtons() {
   document.getElementById('btn-ywindow-200k').className = yWindowMode === '200k' ? 'active' : '';
   document.getElementById('btn-ywindow-1m').className   = yWindowMode === '1m'   ? 'active' : '';
   document.getElementById('windowsback-toggle').style.display = (timeWindow === 'week' || timeWindow === '5h') ? 'flex' : 'none';
-  document.getElementById('colormode-toggle').style.display   = isRawView() ? 'flex' : 'none';
+  document.getElementById('colormode-toggle').style.display   = 'flex';
   document.getElementById('ywindow-toggle').style.display     = (activeTab === 'tokens' && isRawView()) ? 'flex' : 'none';
   document.getElementById('chart-subtitle').textContent = subtitleText();
 }
@@ -854,12 +816,11 @@ function buildSessionDatasets(src) {
   });
 }
 
-// Tooltip row lookup that works for both raw (per-session) and aggregated (per-WHO) datasets.
+// Tooltip row lookup: datasets are per-session in every window, so always read sessionDataStore.
 function rowFromItems(items) {
   const it = items[0];
   if (!it) return null;
-  const store = isRawView() ? sessionDataStore : whoDataStore;
-  const arr = store[it.dataset.label];
+  const arr = sessionDataStore[it.dataset.label];
   return (arr && arr[it.dataIndex] && arr[it.dataIndex]._r) || null;
 }
 
@@ -876,32 +837,9 @@ function makeAllModeChart() {
     };
   }
 
-  // Model mode shades each session of a model; N = sessions of that model in the VISIBLE window.
-  if (isRawView()) recomputeModelShades(src);
-
-  let datasets;
-  if (isRawView()) {
-    datasets = buildSessionDatasets(src);   // one line per session: links within, isolates across (item 1)
-  } else {
-    // Aggregated (week/full): one series per WHO (rows are bucket sums, session-less).
-    const whoSet = [...new Set(src.map(r => r.who))];
-    whoDataStore = {};
-    datasets = whoSet.map(who => {
-      const pts = src.filter(r => r.who === who)
-        .map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r }))
-        .sort((a, b) => a.x - b.x);
-      whoDataStore[who] = pts;
-      return {
-        label: who, data: pts,
-        segment: { borderColor: ctx => { const p0 = pts[ctx.p0DataIndex]; return p0 ? rowColor(p0._r) : 'transparent'; } },
-        borderWidth: 1.5,
-        pointBackgroundColor: pts.map(p => rowColor(p._r)),
-        pointBorderColor:     pts.map(p => rowColor(p._r)),
-        pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
-        pointRadius: 4, pointHoverRadius: 6, tension: 0.15, fill: false,
-      };
-    });
-  }
+  // Model-mode shades over the visible window; individual sessions in EVERY window (no WHO/weekly merge).
+  recomputeModelShades(src);
+  const datasets = buildSessionDatasets(src);
 
   render(datasets, min, max, annotations, () => baseOptions(min, max, rowFromItems));
 }
@@ -909,23 +847,8 @@ function makeAllModeChart() {
 function makeSingleModeChart() {
   const { min, max } = windowBounds();
   const src = displayRows(rows);
-  if (isRawView()) recomputeModelShades(src);   // item 7: model shades over the visible window
-  let datasets;
-  if (isRawView()) {
-    datasets = buildSessionDatasets(src);   // one line per session: links within, isolates across (item 1)
-  } else {
-    const pts = src.map(r => ({ x: pointMs(r), y: getYForRow(r), _r: r })).sort((a, b) => a.x - b.x);
-    singleRowRef = pts;
-    datasets = [{
-      data: pts,
-      segment: { borderColor: ctx => { const p0 = pts[ctx.p0DataIndex]; return p0 ? rowColor(p0._r) : 'transparent'; } },
-      borderWidth: 1.5,
-      pointBackgroundColor: pts.map(p => rowColor(p._r)),
-      pointBorderColor:     pts.map(p => rowColor(p._r)),
-      pointStyle:           pts.map(p => whoPointStyle(p._r.who)),   // item 7: shape encodes WHO
-      pointRadius: 4, pointHoverRadius: 6, tension: 0.15, fill: false,
-    }];
-  }
+  recomputeModelShades(src);   // model shades over the visible window
+  const datasets = buildSessionDatasets(src);   // individual sessions in every window
 
   const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
   if (activeTab === 'tokens' && isRawView()) {
@@ -936,11 +859,7 @@ function makeSingleModeChart() {
     };
   }
 
-  render(datasets, min, max, annotations, () => baseOptions(min, max, items => {
-    if (isRawView()) return rowFromItems(items);
-    const p = singleRowRef[items[0]?.dataIndex];
-    return p && p._r;
-  }));
+  render(datasets, min, max, annotations, () => baseOptions(min, max, rowFromItems));
 }
 
 function setTokensMode(mode) {
@@ -1078,7 +997,7 @@ function setTab(tab) {
   document.getElementById('ywindow-toggle').style.display = (tab === 'tokens' && isRawView()) ? 'flex' : 'none';
   document.getElementById('cost-toggle').style.display    = tab === 'cost'   ? 'flex' : 'none';
   document.getElementById('windowsback-toggle').style.display = (timeWindow === 'week' || timeWindow === '5h') ? 'flex' : 'none';
-  document.getElementById('colormode-toggle').style.display   = isRawView() ? 'flex' : 'none';
+  document.getElementById('colormode-toggle').style.display   = 'flex';
   makeChart();
 }
 
@@ -1129,7 +1048,7 @@ function setWhoFilter(who) {
   });
   rows = who === 'all' ? allRows : allRows.filter(r => r.who === who);
   // Color toggle is who-filter independent now; shown in every raw view (item 7).
-  document.getElementById('colormode-toggle').style.display = isRawView() ? 'flex' : 'none';
+  document.getElementById('colormode-toggle').style.display = 'flex';
   makeChart();
   updateStats();
   updateLegend();
