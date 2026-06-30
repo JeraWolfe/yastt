@@ -78,6 +78,44 @@ already in the dashboard. Only the *design-time* cost inside Claude Design is mi
 
 ---
 
+## VETTING (2026-06-18) — can we "account for the difference" / "log a design-specific model"?
+
+Two follow-up ideas from Jera, vetted against the **live raw `/api/oauth/usage` response** on this
+account (fetched via the running cwatch proxy):
+
+```
+five_hour:        { utilization: 8.0,  resets_at, limit_dollars: null, used_dollars: null, remaining_dollars: null }
+seven_day:        { utilization: 4.0,  ..., *_dollars: null }
+seven_day_opus:   null
+seven_day_sonnet: { utilization: 0.0,  ..., *_dollars: null }
+extra_usage:      { is_enabled: true, monthly_limit: 2000, used_credits: 0.0, currency: USD }   // overage credits, in $
+spend:            { used.amount_minor: 0, limit.amount_minor: 2000, ... }                       // overage spend, in $
+limits: [ { kind: session, percent: 8 }, { kind: weekly_all, percent: 4 }, { kind: weekly_scoped(Sonnet), percent: 0 } ]
+member_dashboard_available: false
+```
+
+**Idea A — "tighten logging to account for the difference, log it as a design-specific model."**
+Not feasible with available data. The endpoint reports **utilization percentages only**; all absolute
+base-usage fields (`limit_dollars`, `used_dollars`, `remaining_dollars`) are **null**, and there are
+**no token counts**. With no absolute account total (tokens or dollars), there is nothing to subtract
+the locally-summed per-exchange tokens *from* — a "difference" can't be computed. Even if it could,
+the difference would be **all** untracked usage (Design + Planner + browser + web chat), not Design
+alone, so it couldn't be logged as a Design-specific model honestly. The only absolute figure is the
+**extra-usage overage in dollars** (currently $0); it would only ever show *over-limit* spend, account-wide.
+
+**Idea B — "we get explicit token usage in our responses; we can get total tokens used."**
+True, but only for **locally-hooked clients**. Every Claude Code assistant turn carries an exact
+`usage` object — `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`,
+`output_tokens` — which the YASTT hooks already read per exchange (and YASTT already sums cost; a
+running **total tokens** is the sum of the `TokenDelta` column). So CLI/Desktop have explicit,
+totalable usage. **Claude Design does not** — being cloud-only, no response object reaches the
+machine, and the account endpoint exposes no per-product, per-token, or Design-isolated number.
+
+**Verdict:** neither idea yields Design-specific attribution. Per-exchange explicit usage stays
+limited to locally-hooked clients; Design remains aggregate-only (folded into the account utilization
+%, and into the Opus bucket when it runs). Revisit if/when a Design API, a member usage dashboard
+(`member_dashboard_available` flips true), or absolute fields in the endpoint appear.
+
 ## Sources
 
 - [Introducing Claude Design by Anthropic Labs](https://www.anthropic.com/news/claude-design-anthropic-labs)
