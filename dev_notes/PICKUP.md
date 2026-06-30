@@ -1,5 +1,46 @@
 # YASTT — Pickup Notes
 
+## Current State — 2026-06-30 (C-Bug)
+
+**YASTT 0.2.0-alpha — shipped & pushed.** Live deploy unified to `~/.claude/yastt/` (migrated off the old
+`~/.claude/` root layout; snapshot `~/.claude/yastt_premigrate_backup_20260617_180644`). Live server runs
+`~/.claude/yastt/cwatch.js` on :8765 with a continuous 60s `/usage` sampler.
+
+### Done this session
+- 8-item dashboard overhaul (session isolation, full-history FULL, agent Gantt bars, single window
+  toggle, Log tab, compact guard same-session+model, Session/Model color toggle, all-time cost tile).
+- Session-linking fix (one Chart.js dataset **per session** — was merging interleaved sessions).
+- Fixed model hues: **opus=green, sonnet=blue, fable=yellow, haiku=magenta** (top-chart Model mode).
+- **Individual sessions in EVERY window** — Week/Full no longer merge to one line (aggregate/tier code
+  kept for storage/retention only). "Just display for now."
+- Agents: colored by **parent session** (matches top chart) + tooltip session name in that color; lane
+  only in-window agents; `agent_usage.csv` header rewritten to include `Duration`.
+- cwatch: util-sample logging + continuous 60s sampler → `yastt_util_samples.csv`.
+
+### Designer / cmonkey cloud estimation (the active build)
+- Designer = Claude Design (Anthropic Labs): cloud-only, **always Opus**, same subscription → no local
+  hook, no API. Only visible in account-wide gauges. Ref: `dev_notes/REF_claude_design_token_tracking.md`.
+- Approach (Jera's): calibrate **tokens-per-1% off the 5-HOUR bucket** (NOT weekly) from clean
+  non-Designer intervals; the residual (5h↑ while local flat) = Designer. Sampler already captured these
+  bumps (clean 1% steps; e.g. 5h 5→6→7→8→9% with localΔ=0).
+- Designer renders **magenta** as a **special agent in the Agents tab** (estimated, not a session).
+- Two views planned: **incremental** (quarantine — each bump from 0) + **cumulative** (running total,
+  weekly-reset subtotals). Estimates stay quarantined in their own file but are **summed in the output
+  via a toggle button**.
+
+### Next actions
+1. **Build B** — the estimator + Designer-as-magenta-agent (this is what finally makes Designer show).
+2. The incremental/quarantine + cumulative/aggregate views + the toggle button.
+3. (Maybe) restore the aggregated hourly/weekly consumption view as an optional toggle.
+
+### Refs / safety
+- Memory: `answer-as-asked-no-intent-reframing`, `designer-is-always-opus`.
+- Backups: premigrate snapshot; `*.bak_*` for cwatch/html/agent_usage.
+
+---
+
+## Earlier — 2026-06-17 (pre-migration housecleaning)
+
 **Last updated:** 2026-06-17
 **Updated by:** C-Bug (claude-gml-plugin instance) during cross-project housecleaning.
 
