@@ -736,6 +736,20 @@ function makeChart() {
 }
 
 // Shared chart options. The tooltip row lookup differs per mode (rowGetter).
+// DELTA-mode y-scale: fit to the visible per-exchange deltas instead of the 200K/1M cap, so the line
+// isn't flat on the floor. y stays 0-based; y-max = highest + max(lowest, 10% of highest) headroom,
+// over the current window. (TOTAL mode keeps the cap scale -- that's the "topping out" view.)
+function deltaYBounds() {
+  const { min, max } = windowBounds();
+  const base = whoFilter === 'all' ? allRows : rows;
+  const deltas = mFilter(base)
+    .filter(r => { const t = rowMs(r); return !isNaN(t) && t >= min && t <= max; })
+    .map(r => r.delta).filter(d => d > 0);
+  if (!deltas.length) return 200000;
+  const hi = Math.max(...deltas), lo = Math.min(...deltas);
+  return Math.ceil(hi + Math.max(lo, hi * 0.10));
+}
+
 function baseOptions(min, max, rowGetter) {
   return {
     responsive: true, maintainAspectRatio: false, animation: { duration: 800, easing: 'easeInOutQuart' },
@@ -756,7 +770,7 @@ function baseOptions(min, max, rowGetter) {
     },
     scales: {
       x: { type: 'linear', min, max, ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' }, maxTicksLimit: 12, maxRotation: 0, callback: xTickCallback }, grid: { color: '#181818' } },
-      y: { ...(activeTab === 'tokens' ? { min: 0, ...(isRawView() ? { max: yWindowMode === '200k' ? 200000 : 1000000 } : {}) } : {}), ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' } }, grid: { color: '#181818' } }
+      y: { ...(activeTab === 'tokens' ? { min: 0, ...(tokensMode === 'delta' ? { max: deltaYBounds() } : (isRawView() ? { max: yWindowMode === '200k' ? 200000 : 1000000 } : {})) } : {}), ticks: { color: '#3a3a3a', font: { size: 8, family: 'Consolas' } }, grid: { color: '#181818' } }
     }
   };
 }
@@ -778,7 +792,8 @@ function render(datasets, min, max, annotations, makeOpts) {
     chart.options.scales.x.max = max;
     if (activeTab === 'tokens') {
       chart.options.scales.y.min = 0;
-      if (isRawView()) chart.options.scales.y.max = yWindowMode === '200k' ? 200000 : 1000000;
+      if (tokensMode === 'delta') chart.options.scales.y.max = deltaYBounds();
+      else if (isRawView()) chart.options.scales.y.max = yWindowMode === '200k' ? 200000 : 1000000;
       else delete chart.options.scales.y.max;
     } else { delete chart.options.scales.y.min; delete chart.options.scales.y.max; }
     chart.options.plugins.annotation.annotations = annotations;
@@ -829,7 +844,7 @@ function makeAllModeChart() {
   const src = displayRows(allRows);
   // Per-pip markers (compacts, 5h-starts) only make sense over raw/week views, not the all-time full view.
   const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
-  if (activeTab === 'tokens' && isRawView()) {
+  if (activeTab === 'tokens' && isRawView() && tokensMode !== 'delta') {
     annotations['sonnet_max'] = {
       type: 'line', yMin: 200000, yMax: 200000,
       borderColor: '#1a3a1a', borderWidth: 1, borderDash: [6, 3],
@@ -851,7 +866,7 @@ function makeSingleModeChart() {
   const datasets = buildSessionDatasets(src);   // individual sessions in every window
 
   const annotations = timeWindow === 'full' ? {} : buildMarkers(min, max);
-  if (activeTab === 'tokens' && isRawView()) {
+  if (activeTab === 'tokens' && isRawView() && tokensMode !== 'delta') {
     annotations['sonnet_max'] = {
       type: 'line', yMin: 200000, yMax: 200000,
       borderColor: '#1a3a1a', borderWidth: 1, borderDash: [6, 3],
