@@ -84,6 +84,10 @@
   .limit-toggle { cursor: pointer; }
   .limit-row { display: flex; gap: 8px; align-items: stretch; overflow: hidden; max-height: 0; margin: 0; transition: max-height 0.4s ease, margin 0.4s ease; }
   .limit-row.open { max-height: 90px; margin-bottom: 12px; }
+  .cost-breakdown { display: none; flex-wrap: wrap; gap: 3px 20px; margin: 0 2px 12px; font-size: 0.6rem; color: #888; }
+  .cost-breakdown.open { display: flex; }
+  .cost-breakdown .cbh { width: 100%; color: #555; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.55rem; margin-bottom: 2px; }
+  .cost-breakdown .cbrow .cbc { color: #ccc; }
   .mgauge { background: #111; border: 1px solid #1e1e1e; border-radius: 3px; padding: 7px 14px; min-width: 96px; text-align: left; font-family: inherit; }
   .mgauge .ml { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.1em; color: #555; }
   .mgauge .mv { font-size: 1.0rem; color: #fff; margin-top: 2px; }            /* bright white number */
@@ -121,6 +125,7 @@
 <div class="stats" id="stats"></div>
 
 <div class="limit-row" id="limit-row"></div>
+<div class="cost-breakdown" id="cost-breakdown"></div>
 
 <div class="tab-bar">
   <div class="tab active" id="tab-tokens" style="--tab-color:#3399ff" onclick="setTab('tokens')">
@@ -282,6 +287,8 @@ let whoDataStore  = {};
 let sessionDataStore = {};   // session key -> its plotted points; one line per session (raw views)
 let singleRowRef  = [];
 let allTimeCost   = 0;        // account-wide cost across every exchange + weekly archive; window/filter-independent (item 8)
+let costData      = null;     // accurate /costs sweep: { machineAll, machineMonth, projects:[{name,all,month}] }
+let costScope     = 'all';    // cost tile scope toggle: 'all' (total history) | 'month' (this calendar month)
 
 function buildAllTs() {
   return [...new Set(allRows.map(r => `${r.date} ${r.time}`))].sort();
@@ -938,11 +945,34 @@ function updateAllTimeCost() {
   return allTimeCost;
 }
 
+// Accurate cost from the cwatch /costs sweep (every turn, all projects). Lazy: fetched when the 7D
+// panel opens, refreshed while it stays open. Server caches 5 min, so polling is cheap.
+async function fetchCosts() {
+  try {
+    const d = await (await fetch('costs?t=' + Date.now())).json();
+    if (d && !d.error) { costData = d; renderModelRow(); }
+  } catch (e) {}
+}
+function toggleCostScope() { costScope = costScope === 'all' ? 'month' : 'all'; renderModelRow(); }
+
+// Per-project cost list under the 7D panel, honoring the active scope. Hidden when the panel is closed.
+function renderCostBreakdown() {
+  const el = document.getElementById('cost-breakdown');
+  if (!el) return;
+  if (!limitsOpen || !costData || !costData.projects) { el.className = 'cost-breakdown'; el.innerHTML = ''; return; }
+  const scopeVal = p => costScope === 'month' ? p.month : p.all;
+  const rows = costData.projects.slice()
+    .filter(p => scopeVal(p) > 0).sort((a, b) => scopeVal(b) - scopeVal(a))
+    .map(p => `<div class="cbrow"><span class="cbc">$${scopeVal(p).toFixed(2)}</span> &middot; ${p.name}</div>`).join('');
+  el.className = 'cost-breakdown open';
+  el.innerHTML = `<div class="cbh">per project &middot; ${costScope === 'month' ? 'this month' : 'all-time'} &middot; API-equivalent (pay-per-token)</div>` + rows;
+}
+
 function renderModelRow() {
   const row = document.getElementById('limit-row');
   if (!row) return;
   row.className = 'limit-row' + (limitsOpen ? ' open' : '');
-  if (!limitsOpen) { row.innerHTML = ''; return; }
+  if (!limitsOpen) { row.innerHTML = ''; renderCostBreakdown(); return; }
   const u = usageLimits || {};
   const norm = v => v == null ? null : (v <= 1 ? v * 100 : v);
   const barCol = p => p < 60 ? '#33ff66' : p < 85 ? '#ffdd44' : '#ff4444';
@@ -957,16 +987,25 @@ function renderModelRow() {
     const barInner = v == null ? '' : `<div style="width:${Math.min(100, v)}%;background:${barCol(v)}"></div>`;
     return `<div class="${cls}"${click}><div class="ml">${label}</div><div class="mv">${v == null ? '—' : v.toFixed(0) + '%'}</div><div class="mbar">${barInner}</div></div>`;
   };
-  updateAllTimeCost();
-  // All-time total cost tile: account-wide, every exchange + archive, ignores window and all filters (item 8).
-  const allTimeTile = `<div class="mgauge"><div class="ml">All-Time Cost</div><div class="mv">$${allTimeCost.toFixed(2)}</div><div class="mbar"></div></div>`;
+  // Accurate machine-wide cost tile from /costs: total for the active scope, click to toggle
+  // all-time <-> this-month. Falls back to the per-exchange estimate until the sweep lands.
+  let costVal, costLabel;
+  if (costData) {
+    costVal = costScope === 'month' ? costData.machineMonth : costData.machineAll;
+    costLabel = costScope === 'month' ? 'Cost · month' : 'Cost · all-time';
+  } else {
+    updateAllTimeCost();
+    costVal = allTimeCost; costLabel = 'Cost · all-time';
+  }
+  const costTile = `<div class="mgauge btn" onclick="toggleCostScope()" title="click: all-time ↔ this-month (all projects, API-equivalent)"><div class="ml">${costLabel}</div><div class="mv">$${costVal.toFixed(2)}</div><div class="mbar"></div></div>`;
   row.innerHTML =
     tile('5H', u.fiveHourUtil, null) +        // window gauge (info only)
     tile('All 7D', u.weeklyUtil, 'all') +     // clears the model filter
     tile('Opus', u.opusUtil, 'opus') +
     tile('Sonnet', u.sonnetUtil, 'sonnet') +
     tile('Haiku', null, 'haiku') +
-    allTimeTile;
+    costTile;
+  renderCostBreakdown();
 }
 
 function setModelFilter(key) {
@@ -980,6 +1019,7 @@ function setModelFilter(key) {
 function toggleLimits() {
   limitsOpen = !limitsOpen;
   if (!limitsOpen) modelFilter = 'all';   // collapsing clears the filter so the graph returns to all models
+  if (limitsOpen) fetchCosts();           // load/refresh the accurate cost sweep when the panel opens
   renderModelRow();
   updateStats();
   makeChart();
@@ -1327,6 +1367,7 @@ setLimitMode('polling');
 setInterval(fetchAndRefresh, 10000);
 setInterval(fetchLog, 10000);
 setInterval(fetchAgents, 10000);
+setInterval(() => { if (limitsOpen) fetchCosts(); }, 120000);   // refresh cost sweep while the 7D panel is open
 setInterval(fetchTiers, 30000);
 </script>
 </body>
