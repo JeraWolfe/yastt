@@ -288,7 +288,8 @@ let sessionDataStore = {};   // session key -> its plotted points; one line per 
 let singleRowRef  = [];
 let allTimeCost   = 0;        // account-wide cost across every exchange + weekly archive; window/filter-independent (item 8)
 let costData      = null;     // accurate /costs sweep: { machineAll, machineMonth, projects:[{name,all,month}] }
-let costScope     = 'all';    // cost tile scope toggle: 'all' (total history) | 'month' (this calendar month)
+let costScope     = 'all';    // cost expand scope: 'all' (total history) | 'month' (this calendar month)
+let costExpanded  = false;    // COST header tile expanded -> shows per-project breakdown + total over time
 
 function buildAllTs() {
   return [...new Set(allRows.map(r => `${r.date} ${r.time}`))].sort();
@@ -411,7 +412,11 @@ function updateStats() {
     ['Last Cost',  '$' + lastCost.toFixed(4)],
     ['Avg Cache',  (avgCache * 100).toFixed(1) + '%'],
     ['Compacts',   src.filter(r => r.isCompact).length],
-  ].map(([l, v]) => `<div class="stat"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
+  ].map(([l, v]) => {
+    // COST is clickable: default shows the in-graph (view) total; click expands per-project + total over time.
+    if (l === 'Cost') return `<div class="stat limit-toggle" onclick="toggleCostExpand()" title="click: by-project + total over time"><div class="stat-label">${l} ${costExpanded ? '▾' : '▸'}</div><div class="stat-value">${v}</div></div>`;
+    return `<div class="stat"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`;
+  }).join('');
 
   // Budget: only the overall 7D chip shows by default; clicking it reveals the per-model usage row.
   if (usageLimits && usageLimits.weeklyUtil != null) {
@@ -950,29 +955,39 @@ function updateAllTimeCost() {
 async function fetchCosts() {
   try {
     const d = await (await fetch('costs?t=' + Date.now())).json();
-    if (d && !d.error) { costData = d; renderModelRow(); }
+    if (d && !d.error) { costData = d; renderCostBreakdown(); }
   } catch (e) {}
 }
-function toggleCostScope() { costScope = costScope === 'all' ? 'month' : 'all'; renderModelRow(); }
+function toggleCostScope() { costScope = costScope === 'all' ? 'month' : 'all'; renderCostBreakdown(); }
+function toggleCostExpand() {
+  costExpanded = !costExpanded;
+  if (costExpanded && !costData) fetchCosts();
+  renderCostBreakdown();
+  updateStats();   // refresh the caret on the COST tile
+}
 
-// Per-project cost list under the 7D panel, honoring the active scope. Hidden when the panel is closed.
+// Cost expand (under the header, driven by the COST tile): the total over time for the active scope +
+// a per-project breakdown. Hidden when the tile is collapsed.
 function renderCostBreakdown() {
   const el = document.getElementById('cost-breakdown');
   if (!el) return;
-  if (!limitsOpen || !costData || !costData.projects) { el.className = 'cost-breakdown'; el.innerHTML = ''; return; }
+  if (!costExpanded || !costData || !costData.projects) { el.className = 'cost-breakdown'; el.innerHTML = ''; return; }
   const scopeVal = p => costScope === 'month' ? p.month : p.all;
+  const machine = costScope === 'month' ? costData.machineMonth : costData.machineAll;
   const rows = costData.projects.slice()
     .filter(p => scopeVal(p) > 0).sort((a, b) => scopeVal(b) - scopeVal(a))
     .map(p => `<div class="cbrow"><span class="cbc">$${scopeVal(p).toFixed(2)}</span> &middot; ${p.name}</div>`).join('');
   el.className = 'cost-breakdown open';
-  el.innerHTML = `<div class="cbh">per project &middot; ${costScope === 'month' ? 'this month' : 'all-time'} &middot; API-equivalent (pay-per-token)</div>` + rows;
+  el.innerHTML =
+    `<div class="cbh">total over time &middot; API-equivalent (pay-per-token) &middot; ` +
+    `<span class="cbc" style="cursor:pointer" onclick="toggleCostScope()">${costScope === 'month' ? 'this month' : 'all-time'} ($${machine.toFixed(2)}) &#9662;</span></div>` + rows;
 }
 
 function renderModelRow() {
   const row = document.getElementById('limit-row');
   if (!row) return;
   row.className = 'limit-row' + (limitsOpen ? ' open' : '');
-  if (!limitsOpen) { row.innerHTML = ''; renderCostBreakdown(); return; }
+  if (!limitsOpen) { row.innerHTML = ''; return; }
   const u = usageLimits || {};
   const norm = v => v == null ? null : (v <= 1 ? v * 100 : v);
   const barCol = p => p < 60 ? '#33ff66' : p < 85 ? '#ffdd44' : '#ff4444';
@@ -987,25 +1002,12 @@ function renderModelRow() {
     const barInner = v == null ? '' : `<div style="width:${Math.min(100, v)}%;background:${barCol(v)}"></div>`;
     return `<div class="${cls}"${click}><div class="ml">${label}</div><div class="mv">${v == null ? '—' : v.toFixed(0) + '%'}</div><div class="mbar">${barInner}</div></div>`;
   };
-  // Accurate machine-wide cost tile from /costs: total for the active scope, click to toggle
-  // all-time <-> this-month. Falls back to the per-exchange estimate until the sweep lands.
-  let costVal, costLabel;
-  if (costData) {
-    costVal = costScope === 'month' ? costData.machineMonth : costData.machineAll;
-    costLabel = costScope === 'month' ? 'Cost · month' : 'Cost · all-time';
-  } else {
-    updateAllTimeCost();
-    costVal = allTimeCost; costLabel = 'Cost · all-time';
-  }
-  const costTile = `<div class="mgauge btn" onclick="toggleCostScope()" title="click: all-time ↔ this-month (all projects, API-equivalent)"><div class="ml">${costLabel}</div><div class="mv">$${costVal.toFixed(2)}</div><div class="mbar"></div></div>`;
   row.innerHTML =
     tile('5H', u.fiveHourUtil, null) +        // window gauge (info only)
     tile('All 7D', u.weeklyUtil, 'all') +     // clears the model filter
     tile('Opus', u.opusUtil, 'opus') +
     tile('Sonnet', u.sonnetUtil, 'sonnet') +
-    tile('Haiku', null, 'haiku') +
-    costTile;
-  renderCostBreakdown();
+    tile('Haiku', null, 'haiku');
 }
 
 function setModelFilter(key) {
@@ -1019,7 +1021,6 @@ function setModelFilter(key) {
 function toggleLimits() {
   limitsOpen = !limitsOpen;
   if (!limitsOpen) modelFilter = 'all';   // collapsing clears the filter so the graph returns to all models
-  if (limitsOpen) fetchCosts();           // load/refresh the accurate cost sweep when the panel opens
   renderModelRow();
   updateStats();
   makeChart();
@@ -1367,7 +1368,7 @@ setLimitMode('polling');
 setInterval(fetchAndRefresh, 10000);
 setInterval(fetchLog, 10000);
 setInterval(fetchAgents, 10000);
-setInterval(() => { if (limitsOpen) fetchCosts(); }, 120000);   // refresh cost sweep while the 7D panel is open
+setInterval(() => { if (costExpanded) fetchCosts(); }, 120000);   // refresh cost sweep while the COST tile is expanded
 setInterval(fetchTiers, 30000);
 </script>
 </body>
