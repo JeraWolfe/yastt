@@ -185,6 +185,68 @@ async function runRollup() {
   bumpHourlyToWeekly(cws - WEEK_MS, anchor);  // keep the last completed week as hourly; older -> weekly
 }
 
+// ── Cost sweep (accurate, machine-wide) ────────────────────────────────────────
+// Sum EVERY assistant turn's API-equivalent cost across all session transcripts -> per project + a
+// machine total, split all-time vs the current calendar month. Mirrors how the API actually bills
+// (every request), unlike the per-exchange hook log. Cache tokens are DISJOINT from input_tokens in
+// Anthropic's usage object, so they are NOT subtracted. Synthetic/unpriced models are non-billable -> $0.
+// Cached (COST_TTL) because sweeping every transcript is heavy.
+const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const COST_TTL = 5 * 60 * 1000;
+let costCache = { data: null, at: 0 };
+
+function turnCost(model, u) {
+  const m = (model || '').toLowerCase();
+  let rin, rout, rcw, rcr;
+  if (m.includes('opus'))        { rin = 15;   rout = 75; rcw = 18.75; rcr = 1.50; }
+  else if (m.includes('sonnet')) { rin = 3;    rout = 15; rcw = 3.75;  rcr = 0.30; }
+  else if (m.includes('haiku'))  { rin = 0.80; rout = 4;  rcw = 1.00;  rcr = 0.08; }
+  else return 0;   // <synthetic>, empty, or unpriced -> non-billable
+  const inp = +u.input_tokens || 0, out = +u.output_tokens || 0;
+  const cw = +u.cache_creation_input_tokens || 0, cr = +u.cache_read_input_tokens || 0;
+  return inp / 1e6 * rin + out / 1e6 * rout + cw / 1e6 * rcw + cr / 1e6 * rcr;
+}
+
+const prettyProject = dir => dir.replace(/^C--Users-[^-]+-/, '');   // drop the "C--Users-<user>-" prefix
+
+function sweepCosts() {
+  const monthKey = new Date().toISOString().slice(0, 7);   // current calendar month, YYYY-MM
+  let machineAll = 0, machineMonth = 0;
+  const projects = [];
+  const seen = new Set();   // dedup turns by entry uuid so resume-forks/sidechains can't overcount
+  let dirs = [];
+  try { dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()); } catch (e) { return { monthKey, machineAll, machineMonth, projects }; }
+  for (const d of dirs) {
+    const dirPath = path.join(PROJECTS_DIR, d.name);
+    let all = 0, month = 0, files = [];
+    try { files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl')); } catch (e) { continue; }
+    for (const f of files) {
+      let text;
+      try { text = fs.readFileSync(path.join(dirPath, f), 'utf8'); } catch (e) { continue; }
+      for (const line of text.split('\n')) {
+        if (!line || line.charCodeAt(0) !== 123) continue;   // fast-skip non-JSON-object lines
+        let entry; try { entry = JSON.parse(line); } catch (_) { continue; }
+        if (entry.type !== 'assistant' || !entry.message || !entry.message.usage) continue;
+        if (entry.uuid) { if (seen.has(entry.uuid)) continue; seen.add(entry.uuid); }
+        const c = turnCost(entry.message.model, entry.message.usage);
+        if (!c) continue;
+        all += c;
+        if (typeof entry.timestamp === 'string' && entry.timestamp.slice(0, 7) === monthKey) month += c;
+      }
+    }
+    if (all > 0) { projects.push({ name: prettyProject(d.name), all, month }); machineAll += all; machineMonth += month; }
+  }
+  projects.sort((a, b) => b.all - a.all);
+  return { monthKey, machineAll, machineMonth, projects };
+}
+
+function getCosts() {
+  const now = Date.now();
+  if (costCache.data && now - costCache.at < COST_TTL) return costCache.data;
+  costCache = { data: sweepCosts(), at: now };
+  return costCache.data;
+}
+
 http.createServer(async (req, res) => {
   const urlPath = req.url.split('?')[0];
 
@@ -202,6 +264,14 @@ http.createServer(async (req, res) => {
       if (usageCache.body) { res.writeHead(200); res.end(usageCache.body); }      // serve stale rather than fail
       else { res.writeHead(200); res.end(JSON.stringify({ error: String(e.message || e) })); }
     }
+    return;
+  }
+
+  if (urlPath === '/costs') {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    try { res.writeHead(200); res.end(JSON.stringify(getCosts())); }
+    catch (e) { res.writeHead(200); res.end(JSON.stringify({ error: String(e.message || e) })); }
     return;
   }
 
