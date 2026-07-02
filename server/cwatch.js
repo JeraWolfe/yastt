@@ -207,7 +207,8 @@ function turnCost(model, u) {
   return inp / 1e6 * rin + out / 1e6 * rout + cw / 1e6 * rcw + cr / 1e6 * rcr;
 }
 
-const prettyProject = dir => dir.replace(/^C--Users-[^-]+-/, '');   // drop the "C--Users-<user>-" prefix
+const HOME_BASE = path.basename(os.homedir());   // e.g. "jeraw" -- too generic to be a project name
+const prettyProject = dir => /^C--Users-[^-]+$/.test(dir) ? 'home' : dir.replace(/^C--Users-[^-]+-/, '');
 
 function sweepCosts() {
   const monthKey = new Date().toISOString().slice(0, 7);   // current calendar month, YYYY-MM
@@ -218,7 +219,7 @@ function sweepCosts() {
   try { dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()); } catch (e) { return { monthKey, machineAll, machineMonth, projects }; }
   for (const d of dirs) {
     const dirPath = path.join(PROJECTS_DIR, d.name);
-    let all = 0, month = 0, files = [];
+    let all = 0, month = 0, cwdName = null, files = [];
     try { files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl')); } catch (e) { continue; }
     for (const f of files) {
       let text;
@@ -226,6 +227,7 @@ function sweepCosts() {
       for (const line of text.split('\n')) {
         if (!line || line.charCodeAt(0) !== 123) continue;   // fast-skip non-JSON-object lines
         let entry; try { entry = JSON.parse(line); } catch (_) { continue; }
+        if (!cwdName && entry.cwd) { try { cwdName = path.basename(entry.cwd); } catch (_) {} }   // real project folder name
         if (entry.type !== 'assistant' || !entry.message || !entry.message.usage) continue;
         if (entry.uuid) { if (seen.has(entry.uuid)) continue; seen.add(entry.uuid); }
         const c = turnCost(entry.message.model, entry.message.usage);
@@ -234,7 +236,10 @@ function sweepCosts() {
         if (typeof entry.timestamp === 'string' && entry.timestamp.slice(0, 7) === monthKey) month += c;
       }
     }
-    if (all > 0) { projects.push({ name: prettyProject(d.name), all, month }); machineAll += all; machineMonth += month; }
+    if (all > 0) {
+      const name = (cwdName && cwdName !== HOME_BASE) ? cwdName : prettyProject(d.name);   // home-dir sessions -> distinct dir name
+      projects.push({ name, all, month }); machineAll += all; machineMonth += month;
+    }
   }
   projects.sort((a, b) => b.all - a.all);
   return { monthKey, machineAll, machineMonth, projects };
